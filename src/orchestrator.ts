@@ -314,19 +314,42 @@ export class Orchestrator {
         }
       }
 
-      // Race against timeout — don't let a hung subagent block forever
-      const result = await Promise.race([
-        this.client.v2.session.prompt(promptOpts),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Agent ${agent} timed out after ${getAgentTimeoutMs() / 1000}s`)), getAgentTimeoutMs()),
-        ),
-      ]);
+      let fullText = "";
+      let attempts = 0;
+      const maxContinuationAttempts = 2;
 
-      const parts = (result as any)?.data?.parts ?? (result as any)?.parts ?? [];
-      return parts
-        .filter((p: any) => p.type === "text" && p.text)
-        .map((p: any) => p.text)
-        .join("\n");
+      while (attempts <= maxContinuationAttempts) {
+        // Race against timeout — don't let a hung subagent block forever
+        const result = await Promise.race([
+          this.client.v2.session.prompt(promptOpts),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Agent ${agent} timed out after ${getAgentTimeoutMs() / 1000}s`)), getAgentTimeoutMs()),
+          ),
+        ]);
+
+        const parts = (result as any)?.data?.parts ?? (result as any)?.parts ?? [];
+        const text = parts
+          .filter((p: any) => p.type === "text" && p.text)
+          .map((p: any) => p.text)
+          .join("\n");
+
+        fullText += (fullText ? "\n" : "") + text;
+
+        // Detect truncation: finishReason === "length" OR text ends abruptly
+        const finishReason = (result as any)?.data?.finishReason ?? (result as any)?.finishReason;
+        const isTruncated = finishReason === "length" || looksTruncated(text);
+
+        if (!isTruncated || attempts >= maxContinuationAttempts) {
+          break;
+        }
+
+        // Retry with continuation prompt
+        attempts++;
+        console.log(`[lazycrew] ${agent} response truncated (attempt ${attempts}/${maxContinuationAttempts}), requesting continuation...`);
+        promptOpts.parts = [{ type: "text", text: "Continue exactly from where you stopped. Do not repeat what you already wrote." }];
+      }
+
+      return fullText || undefined;
     } finally {
       try { await this.client.v2?.session?.close?.({ id: sid }); } catch {}
     }
@@ -359,6 +382,30 @@ interface Task {
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40).replace(/^-|-$/g, "");
+}
+
+/**
+ * Detect if a response was cut off before completion.
+ * Checks for sentences that don't end, open code blocks, or trailing "...".
+ */
+function looksTruncated(text: string): boolean {
+  if (!text || text.length < 20) return false;
+  const trimmed = text.trimEnd();
+  // Ends with "..." or starts a partial sentence
+  if (/\.{2,}$/.test(trimmed)) return true;
+  // Ends mid-word
+  if (/\w$/.test(trimmed) && !/[.!?;:]\s*$/.test(trimmed)) return true;
+  // Open code block or markdown structure
+  if ((trimmed.match(/```/g) || []).length % 2 !== 0) return true;
+  // Unclosed brackets or parentheses at the very end
+  const tail = trimmed.slice(-200);
+  const openParens = (tail.match(/\(/g) || []).length;
+  const closeParens = (tail.match(/\)/g) || []).length;
+  const openBrackets = (tail.match(/\[/g) || []).length;
+  const closeBrackets = (tail.match(/\]/g) || []).length;
+  const openCurlies = (tail.match(/\{/g) || []).length;
+  const closeCurlies = (tail.match(/\}/g) || []).length;
+  return openParens > closeParens || openBrackets > closeBrackets || openCurlies > closeCurlies;
 }
 
 /**

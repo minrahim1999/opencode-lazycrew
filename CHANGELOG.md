@@ -2,6 +2,34 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] - 2026-06-23
+
+### Added: Context-limit truncation detection + continuation retry
+
+**Problem:** Subagents sometimes hit their model's context limit and stop mid-generation (sudden stop). Lazycrew returned the partial response as-is, causing garbled output or silent mission failure.
+
+**Fixed:**
+- **`orchestrator.ts`**: `runAgent()` now detects truncation in two ways:
+  1. `finishReason === "length"` from the API response
+  2. Heuristic `looksTruncated()` function: checks for sentences ending without punctuation, open code blocks (unmatched ` ``` `), trailing `...`, and unclosed brackets in the final 200 characters
+- **Continuation loop**: If truncation is detected, fires a follow-up `session.prompt` with `"Continue exactly from where you stopped. Do not repeat what you already wrote."` — up to 2 continuation attempts before giving up.
+- **Result assembly**: All continuation chunks are concatenated into one coherent response, returned to the pipeline.
+
+### Changed: Default model recommendations for cost optimization
+
+**Problem:** All non-coding agents previously defaulted to `nemotron-3-super` or `deepseek-v4-flash`, which are more expensive than needed for lightweight tasks.
+
+**Updated README + defaults:**
+- **architect** → `gemini-3-flash-preview` (was `deepseek-v4-flash`) — planning is lightweight
+- **auditor** → `gemini-3-flash-preview` (was `nemotron-3-super`) — read-only verification
+- **specialist** → `deepseek-v4-flash` (was `nemotron-3-super`) — rare, needs reasoning
+- **global `small_model`** → `gemini-3-flash-preview` (was `nemotron-3-super`)
+- **engineer** stays `kimi-k2.7-code` — coding is where power matters most
+
+### Test Results
+- 31 tests passing (2 test files) — unchanged count, existing test suite still green
+- Typecheck clean
+
 ## [1.5.0] - 2026-06-22
 
 ### Fixed: Ponytail ruleset synced with upstream

@@ -22,10 +22,10 @@ Add to `~/.config/opencode/opencode.json`:
   },
   "agent": {
     "strategist": { "model": "ollama/deepseek-v4-flash" },
-    "architect":  { "model": "ollama/deepseek-v4-flash" },
+    "architect":  { "model": "ollama/gemini-3-flash-preview" },
     "engineer":   { "model": "ollama/kimi-k2.7-code" },
-    "auditor":    { "model": "ollama/nemotron-3-super" },
-    "specialist": { "model": "ollama/nemotron-3-super" }
+    "auditor":    { "model": "ollama/gemini-3-flash-preview" },
+    "specialist": { "model": "ollama/deepseek-v4-flash" }
   },
   "plugin": [
     ["opencode-lazycrew", {
@@ -55,10 +55,10 @@ The plugin registers 5 agents automatically via the `config` hook. You don't nee
 Pick models that fit each role:
 
 - **strategist** → reasoning model (e.g. `deepseek-v4-flash`) — classifies tasks, drives flow
-- **architect** → planning model (e.g. `deepseek-v4-flash`) — decomposes into tasks
+- **architect** → cheap planning model (e.g. `gemini-3-flash-preview`) — decomposes into tasks
 - **engineer** → coding model (e.g. `kimi-k2.7-code`, `qwen3-coder-next`) — writes code
-- **auditor** → fast model (e.g. `nemotron-3-super`) — verifies outputs
-- **specialist** → reasoning model (e.g. `nemotron-3-super`) — diagnoses stuck missions
+- **auditor** → cheap fast model (e.g. `gemini-3-flash-preview`) — verifies outputs
+- **specialist** → reasoning model (e.g. `deepseek-v4-flash`) — diagnoses stuck missions
 
 Use any provider: `ollama/`, `openai/`, `anthropic/`, `google/`, or omit for local models.
 
@@ -134,6 +134,10 @@ lazycrew_config({})                            → just check current settings
 - **Mission state** → ephemeral boolean (`active` or not). No database, no state.json, no MissionStore
 
 Files on disk are the only persistence. If OpenCode restarts mid-mission, the plan and todos are still there — the user can tell the strategist to resume.
+
+## Resilience: Context-Limit Handling
+
+If a subagent hits its model's context limit and stops mid-generation (sudden stop), lazycrew automatically detects the truncation and requests a continuation — up to 2 retries. The full response is assembled and returned to the pipeline, so missions don't derail from partial output.
 
 ## Ponytail
 
