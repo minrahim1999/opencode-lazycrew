@@ -18,6 +18,8 @@
 
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { PONYTAIL, ponytailInstructions } from "./ponytail.js";
 import { Orchestrator } from "./orchestrator.js";
 
@@ -38,6 +40,37 @@ const plugin: Plugin = async (input) => {
   // Mutable runtime config — switchable via lazycrew_config tool
   let automation = opts.automation === true;
   let ponytailLevel = PONYTAIL.normalize(opts.ponytail);
+
+  // Path to opencode.json for persisting config changes
+  const configPath = join(
+    process.env.XDG_CONFIG_HOME || join(process.env.HOME || "", ".config"),
+    "opencode",
+    "opencode.json",
+  );
+
+  /** Write a setting back to opencode.json plugin block */
+  function persistConfig(key: string, value: any): void {
+    try {
+      const raw = readFileSync(configPath, "utf-8");
+      const config = JSON.parse(raw);
+      if (!Array.isArray(config.plugin)) return;
+      const idx = config.plugin.findIndex(
+        (p: any) =>
+          p === "opencode-lazycrew" ||
+          (Array.isArray(p) && p[0] === "opencode-lazycrew"),
+      );
+      if (idx === -1) return;
+      // Ensure plugin block is [name, opts] format
+      if (!Array.isArray(config.plugin[idx])) {
+        config.plugin[idx] = [config.plugin[idx], {}];
+      }
+      if (!config.plugin[idx][1]) config.plugin[idx][1] = {};
+      config.plugin[idx][1][key] = value;
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    } catch (err) {
+      console.warn(`[lazycrew] could not persist ${key} to opencode.json:`, err);
+    }
+  }
 
   // Register agents (based on initial automation setting)
   const agents = Orchestrator.agents(automation);
@@ -114,16 +147,18 @@ const plugin: Plugin = async (input) => {
           if (args.automation !== undefined) {
             automation = args.automation;
             orch.setAutomation(automation);
+            persistConfig("automation", automation);
             changes.push(`automation = ${automation ? "ON (autonomous)" : "OFF (human gates)"}`);
           }
           if (args.ponytail !== undefined) {
             ponytailLevel = PONYTAIL.normalize(args.ponytail);
+            persistConfig("ponytail", ponytailLevel);
             changes.push(`ponytail = ${ponytailLevel}`);
           }
           if (changes.length === 0) {
             return `Current settings — automation: ${automation ? "ON" : "OFF"}, ponytail: ${ponytailLevel}`;
           }
-          return `Updated: ${changes.join(", ")}`;
+          return `Updated and saved to opencode.json: ${changes.join(", ")}`;
         },
       }),
     },
