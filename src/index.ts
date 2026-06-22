@@ -79,9 +79,21 @@ const plugin: Plugin = async (input) => {
   return {
     config: async (config: any) => {
       if (!config.agent) config.agent = {};
+
+      // Capture model assignments from user config
+      const models: Record<string, string | undefined> = {};
+
       for (const [name, cfg] of Object.entries(agents)) {
-        config.agent[name] = { ...cfg, ...(config.agent[name] ?? {}) };
+        const userCfg = config.agent[name] ?? {};
+        config.agent[name] = { ...cfg, ...userCfg };
+        // Capture model if user set one
+        if (userCfg.model) {
+          models[name] = userCfg.model;
+        }
       }
+
+      // Pass models to orchestrator so it can pass them to session.prompt
+      orch.setModels(models);
     },
 
     "experimental.chat.system.transform": async (_input: any, output: any) => {

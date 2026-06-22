@@ -2,6 +2,24 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-06-22
+
+### Fixed: 5 bugs found in code review
+
+1. **Subagents used wrong model (or no model)** — `runAgent()` didn't pass `model` to `session.prompt()`. Subagents inherited the global default model instead of their assigned model. Fixed: config hook now captures model assignments from `opencode.json` and passes them to `session.prompt({ model: { providerID, modelID } })`.
+
+2. **Sessions leaked** — `runAgent()` created sessions but never closed them. Long missions accumulated zombie sessions, consuming tokens and context. Fixed: `finally` block closes every session after prompt completes.
+
+3. **Abort didn't stop the pipeline** — `abort()` set `active = false` but the task loop checked `active` at the top. By then the next `runAgent()` would re-set `active = true`. Fixed: separate `aborted` flag checked at the start of each task iteration.
+
+4. **Task failures crashed the entire mission** — one engineer failure stopped all remaining tasks. Fixed: each task wrapped in try/catch, failures logged as `⚠`, mission continues to next task. Final summary reports `X done, Y failed`.
+
+5. **`lazycrew_config` tool not registered in strategist permissions** — strategist couldn't call the config tool because it wasn't in its `tools` or `permission` blocks. Fixed: added `lazycrew_config: true` / `lazycrew_config: "allow"` to strategist config.
+
+### Test Results
+- 20 tests passing (2 test files)
+- Typecheck clean
+
 ## [1.2.1] - 2026-06-22
 
 ### Fix: Loading animation disappears and mission appears stuck

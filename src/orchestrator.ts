@@ -1,14 +1,13 @@
 /**
  * Orchestrator — the pipeline engine.
  *
- * strategist (primary) → architect (plan + todos) → engineer(s) (parallel) → auditor (verify)
+ * strategist (primary) → architect (plan + todos) → engineer → auditor
  *
  * Uses OpenCode SDK: session.create + session.prompt.
  * session.create only accepts { title?, parentID? }.
  * session.prompt accepts { agent, model, parts }.
  */
 
-import type { PluginInput } from "@opencode-ai/plugin";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -45,7 +44,7 @@ const PLAN_WRITE = {
   },
 };
 
-const STRATEGIST_PROMPT = `You are the Strategist — the primary agent of the Orchestrator.
+const STRATEGIST_PROMPT = `You are the Strategist — the primary agent of LazyCrew.
 
 ## Your Job
 1. Receive user message → is it a task or a question?
@@ -69,7 +68,7 @@ The tool call stays open while the pipeline runs. This is normal — the loading
 - ALWAYS call the 'question' tool for interactions. NEVER write plain text questions.
 - NEVER do work yourself — delegate to architect (plan), engineer (code), auditor (verify).
 - After compaction, re-read .opencode/todo/{slug}.md to reconstruct state.
-${""}
+
 ## Phase Gates (automation: false only)
 - When architect marks phase-gate: yes on a task → PAUSE, call question tool with "Continue/Hold/Modify".
 - On "Continue" → resume execution. On "Hold" → wait.
@@ -132,12 +131,18 @@ export class Orchestrator {
   private directory: string;
   private automation: boolean;
   private active = false;
-  private sessions = new Map<string, string>();
+  private aborted = false;
+  private models: Record<string, string | undefined> = {};
 
   constructor(opts: { client: any; directory: string; automation: boolean }) {
     this.client = opts.client;
     this.directory = opts.directory;
     this.automation = opts.automation;
+  }
+
+  /** Capture model assignments from opencode.json (called from config hook) */
+  setModels(models: Record<string, string | undefined>): void {
+    this.models = models;
   }
 
   /** Agent configs for the config hook */
@@ -152,8 +157,8 @@ export class Orchestrator {
         description: "Primary agent — detects tasks, drives pipeline",
         prompt: `${STRATEGIST_PROMPT}\n\n${gateInstruction}`,
         temperature: 0.3,
-        tools: { ...READ_ONLY, start_mission: true, abort_mission: true, delegate_task: true },
-        permission: { ...READ_ONLY, start_mission: "allow", abort_mission: "allow", delegate_task: "allow" },
+        tools: { ...READ_ONLY, start_mission: true, abort_mission: true, delegate_task: true, lazycrew_config: true },
+        permission: { ...READ_ONLY, start_mission: "allow", abort_mission: "allow", delegate_task: "allow", lazycrew_config: "allow" },
       },
       architect: {
         mode: "subagent",
@@ -165,7 +170,7 @@ export class Orchestrator {
       },
       engineer: {
         mode: "subagent",
-        description: "Coder — implements tasks in parallel",
+        description: "Coder — implements tasks",
         prompt: ENGINEER_PROMPT,
         temperature: 0.2,
         permission: FULL_ACCESS,
@@ -190,7 +195,7 @@ export class Orchestrator {
   }
 
   /**
-   * Start a mission — architect → engineers → auditor.
+   * Start a mission — architect → engineer(s) → auditor.
    * Returns a progress log (array of status lines).
    * NOT fire-and-forget — the tool call stays open until done,
    * so the loading animation stays visible.
@@ -200,13 +205,15 @@ export class Orchestrator {
       return ["Mission already active — abort first."];
     }
     this.active = true;
+    this.aborted = false;
     const slug = slugify(description);
     const log: string[] = [];
 
     try {
       // 1. Architect plans
       log.push(`▶ Architect planning: ${slug}`);
-      await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission. Use slug: ${slug}`);
+      const archResult = await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission. Use slug: ${slug}`);
+      log.push(`📋 Architect done`);
 
       // 2. Read todos
       const todos = await this.readTodos(slug);
@@ -217,36 +224,52 @@ export class Orchestrator {
       log.push(`📋 ${todos.length} tasks planned`);
 
       // 3. Execute tasks sequentially
+      let done = 0;
+      let failed = 0;
       for (let i = 0; i < todos.length; i++) {
+        if (this.aborted) {
+          log.push(`⏹ Mission aborted at task ${i + 1}/${todos.length}`);
+          break;
+        }
+
         const task = todos[i];
         log.push(`▶ [${i + 1}/${todos.length}] ${task.id}: ${task.description.slice(0, 60)}`);
 
-        await this.runAgent("engineer", this.buildTaskPrompt(slug, task));
+        try {
+          await this.runAgent("engineer", this.buildTaskPrompt(slug, task));
+          done++;
 
-        if (task.critical) {
-          log.push(`🔍 Auditing ${task.id}...`);
-          await this.runAgent("auditor", `Audit task ${task.id} in mission ${slug}. Read the evidence in .opencode/todo/${slug}.md and verify acceptance criteria.`);
+          if (task.critical) {
+            log.push(`🔍 Auditing ${task.id}...`);
+            await this.runAgent("auditor", `Audit task ${task.id} in mission ${slug}. Read the evidence in .opencode/todo/${slug}.md and verify acceptance criteria.`);
+          }
+        } catch (err) {
+          failed++;
+          log.push(`⚠ ${task.id} failed: ${String(err).slice(0, 100)}`);
+          // Continue to next task — don't abort the whole mission
         }
       }
 
-      log.push(`✅ Mission '${slug}' completed — ${todos.length} tasks done`);
+      if (this.aborted) {
+        log.push(`⏹ Mission '${slug}' aborted — ${done} done, ${failed} failed`);
+      } else {
+        log.push(`✅ Mission '${slug}' completed — ${done} done, ${failed} failed`);
+      }
       return log;
     } catch (err) {
       log.push(`❌ Mission failed: ${String(err).slice(0, 200)}`);
       return log;
     } finally {
       this.active = false;
+      this.aborted = false;
     }
   }
 
   /** Abort the current mission */
   abort(): void {
+    this.aborted = true;
     this.active = false;
-    for (const [, sid] of this.sessions) {
-      this.client.v2?.session?.close?.({ id: sid }).catch(() => {});
-    }
-    this.sessions.clear();
-    console.log("[lazycrew] aborted");
+    console.log("[lazycrew] abort requested");
   }
 
   /** Switch automation mode at runtime */
@@ -269,32 +292,49 @@ export class Orchestrator {
   private async runAgent(agent: string, prompt: string): Promise<string | undefined> {
     const session = await this.client.v2.session.create({
       directory: this.directory,
-      title: `orchestrator-${agent}`,
+      title: `lazycrew-${agent}`,
     });
     const sid = session.id ?? session.data?.id;
     if (!sid) throw new Error(`Failed to create session for ${agent}`);
 
-    this.sessions.set(agent, sid);
+    try {
+      // Pass model to session.prompt — critical for subagent model resolution
+      const promptOpts: any = {
+        sessionID: sid,
+        directory: this.directory,
+        agent,
+        parts: [{ type: "text", text: prompt }],
+      };
 
-    const result = await this.client.v2.session.prompt({
-      sessionID: sid,
-      directory: this.directory,
-      agent,
-      parts: [{ type: "text", text: prompt }],
-    });
+      // Only pass model if we have one for this agent
+      const model = this.models[agent];
+      if (model) {
+        const [providerID, modelID] = model.includes("/")
+          ? model.split("/")
+          : [undefined, model];
+        if (providerID && modelID) {
+          promptOpts.model = { providerID, modelID };
+        }
+      }
 
-    // Extract text from result
-    const parts = result?.data?.parts ?? result?.parts ?? [];
-    const text = parts
-      .filter((p: any) => p.type === "text" && p.text)
-      .map((p: any) => p.text)
-      .join("\n");
+      const result = await this.client.v2.session.prompt(promptOpts);
 
-    return text;
+      // Extract text from result
+      const parts = result?.data?.parts ?? result?.parts ?? [];
+      return parts
+        .filter((p: any) => p.type === "text" && p.text)
+        .map((p: any) => p.text)
+        .join("\n");
+    } finally {
+      // Always close the session — don't leak
+      try {
+        await this.client.v2?.session?.close?.({ id: sid });
+      } catch {}
+    }
   }
 
   private slugify(s: string): string {
-    return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40).replace(/^-|-$/g, "");
+    return slugify(s);
   }
 
   private buildTaskPrompt(slug: string, task: Task): string {

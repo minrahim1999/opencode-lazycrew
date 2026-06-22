@@ -163,7 +163,7 @@ Intensity levels:
 npm test
 ```
 
-12 tests covering ponytail ruleset and agent configuration.
+12 tests covering ponytail ruleset, agent configuration, and pipeline execution.
 
 ## License
 
