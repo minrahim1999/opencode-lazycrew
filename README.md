@@ -106,10 +106,6 @@ Auditor: verifies critical-path tasks (PASS/FAIL)
 Strategist: summarizes results to user
 ```
 
-### Phase Gates (automation: false only)
-
-When the architect marks `phase-gate: yes` on the last task of a phase, the strategist pauses and shows a question modal: **Continue / Hold / Modify**. The user controls progression. Single-phase missions run automatically.
-
 ## Tools
 
 - `start_mission` — Launch the pipeline (strategist calls this after user confirms)
@@ -150,7 +146,9 @@ The "lazy senior dev" ruleset is embedded — no external dependency. Before any
 5. One line? → one line
 6. Only then: minimum code that works
 
-Never lazy about: validation, security, accessibility, data-loss handling, anything explicitly requested.
+Never lazy about: validation, security, accessibility, data-loss handling, anything explicitly requested, hardware calibration, user-insisted full versions.
+
+Deactivation: say "stop ponytail" or "normal mode" to turn off. Use `lazycrew_config({ ponytail: "off" })` for programmatic control.
 
 Intensity levels:
 - **lite** — Build what's asked, name the lazier alternative
@@ -163,7 +161,7 @@ Intensity levels:
 npm test
 ```
 
-12 tests covering ponytail ruleset, agent configuration, and pipeline execution.
+31 tests covering ponytail ruleset (16), agent configuration, and pipeline execution (15).
 
 ## License
 

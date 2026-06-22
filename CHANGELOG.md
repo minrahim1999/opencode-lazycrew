@@ -2,6 +2,54 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-06-22
+
+### Fixed: Ponytail ruleset synced with upstream
+
+Audited embedded Ponytail against DietrichGebert/ponytail@main (v4.7.0). Found 7
+missing pieces from the upstream ruleset. All now included:
+
+1. **Persistence reinforcement** — "ACTIVE EVERY RESPONSE. No drift back to
+   over-building. Still active if unsure." Previously a weak one-liner. Now a
+   full section matching upstream.
+
+2. **Deactivation commands** — "stop ponytail" / "normal mode" now recognized
+   as standalone deactivation commands. Added `PONYTAIL.isDeactivationCommand()`
+   utility (case-insensitive, ignores trailing punctuation, rejects partial
+   matches like "add a normal mode toggle").
+
+3. **Reflex-not-research principle** — "The ladder is a reflex, not a research
+   project. Two rungs work → take the higher one and move on."
+
+4. **No-re-arguing rule** — "User insists on full version → build it, no
+   re-arguing." Prevents agents from repeatedly pushing lazy alternatives after
+   the user explicitly asks for the full version.
+
+5. **Hardware/physical world clause** — "Hardware is never the ideal on paper:
+   a real clock drifts, a real sensor reads off. Leave the calibration knob."
+   Important for IoT/embedded tasks.
+
+6. **Testing (lazy but checked) section** — "Lazy code without its check is
+   unfinished. Non-trivial logic leaves ONE runnable check: assert-based
+   self-check or one small test file. No frameworks, no fixtures."
+
+7. **Expanded `ponytail:` comment convention** — now shows both the simple
+   intent marker (`// ponytail: this exists`) and the ceiling+upgrade-path
+   pattern (`# ponytail: global lock, per-account locks if throughput matters`).
+
+### Also fixed
+- Removed stale "Phase Gates" section from README (phase gates were removed in
+  v1.4.0 but the docs still referenced them).
+- Updated Ponytail section in README with deactivation instructions and
+  hardware clause mention.
+
+### Test Results
+- 31 tests passing (2 test files) — up from 21
+  - ponytail.test.ts: 16 tests (was 9) — added persistence, reflex,
+    no-re-arguing, hardware, testing, deactivation, comment convention tests
+  - orchestrator.test.ts: 15 tests (unchanged)
+- Typecheck clean
+
 ## [1.4.0] - 2026-06-22
 
 ### Fixed: 4 issues found in code review
