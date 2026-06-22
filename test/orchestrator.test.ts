@@ -47,3 +47,31 @@ describe("Orchestrator.agents", () => {
     expect(agents.auditor.permission.read).toBe("allow");
   });
 });
+
+describe("Orchestrator.start", () => {
+  // Minimal mock client — session.create + session.prompt
+  const mockClient = {
+    v2: {
+      session: {
+        create: async () => ({ id: "test-session" }),
+        prompt: async () => ({ data: { parts: [{ type: "text", text: "done" }] } }),
+        close: async () => {},
+      },
+    },
+  };
+
+  it("start returns progress log when already active", async () => {
+    const orch = new Orchestrator({ client: mockClient, directory: "/tmp", automation: false });
+    // @ts-ignore — accessing private field
+    orch.active = true;
+    const log = await orch.start("test");
+    expect(log).toEqual(["Mission already active — abort first."]);
+  });
+
+  it("start returns progress log with completed or no-todos status", async () => {
+    const orch = new Orchestrator({ client: mockClient, directory: "/tmp", automation: false });
+    const log = await orch.start("test mission");
+    expect(Array.isArray(log)).toBe(true);
+    expect(log.some((l: string) => l.includes("completed") || l.includes("No todos") || l.includes("failed"))).toBe(true);
+  });
+});

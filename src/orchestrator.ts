@@ -55,6 +55,16 @@ const STRATEGIST_PROMPT = `You are the Strategist — the primary agent of the O
 5. User selects "Proceed" → call start_mission tool with the full description.
 6. Wait for mission completion → summarize results.
 
+## How start_mission Works
+The start_mission tool RUNS the full pipeline (architect → engineer → auditor) and RETURNS when done. It returns a progress log with status lines. You will see output like:
+  ▶ Architect planning: build-auth
+  📋 5 tasks planned
+  ▶ [1/5] TASK-001: Set up database schema
+  🔍 Auditing TASK-001...
+  ✅ Mission 'build-auth' completed — 5 tasks done
+
+The tool call stays open while the pipeline runs. This is normal — the loading animation stays visible. When it returns, read the log and summarize results to the user.
+
 ## Rules
 - ALWAYS call the 'question' tool for interactions. NEVER write plain text questions.
 - NEVER do work yourself — delegate to architect (plan), engineer (code), auditor (verify).
@@ -62,7 +72,14 @@ const STRATEGIST_PROMPT = `You are the Strategist — the primary agent of the O
 ${""}
 ## Phase Gates (automation: false only)
 - When architect marks phase-gate: yes on a task → PAUSE, call question tool with "Continue/Hold/Modify".
-- On "Continue" → resume execution. On "Hold" → wait.`;
+- On "Continue" → resume execution. On "Hold" → wait.
+
+## Compaction Recovery
+If you notice your context was compacted (missing earlier conversation):
+1. Check if .opencode/todo/ has any .md files — if yes, a mission was in progress
+2. Read the todo file to see what's done ([x]) vs pending ([ ])
+3. Tell the user: "Found mission in progress. Completed: X/Y. Resume?"
+4. If user says yes → call start_mission with the remaining tasks`;
 
 const ARCHITECT_PROMPT = `You are the Architect — you write plans and todo lists. You NEVER write code.
 
@@ -172,37 +189,51 @@ export class Orchestrator {
     };
   }
 
-  /** Start a mission — architect → engineers → auditor */
-  async start(description: string): Promise<void> {
+  /**
+   * Start a mission — architect → engineers → auditor.
+   * Returns a progress log (array of status lines).
+   * NOT fire-and-forget — the tool call stays open until done,
+   * so the loading animation stays visible.
+   */
+  async start(description: string): Promise<string[]> {
     if (this.active) {
-      console.warn("[lazycrew] mission already active");
-      return;
+      return ["Mission already active — abort first."];
     }
     this.active = true;
     const slug = slugify(description);
+    const log: string[] = [];
 
     try {
       // 1. Architect plans
-      await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission.`);
+      log.push(`▶ Architect planning: ${slug}`);
+      await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission. Use slug: ${slug}`);
 
       // 2. Read todos
       const todos = await this.readTodos(slug);
       if (todos.length === 0) {
-        console.warn("[lazycrew] no todos produced by architect");
-        return;
+        log.push("⚠ No todos produced by architect — check .opencode/todo/");
+        return log;
       }
+      log.push(`📋 ${todos.length} tasks planned`);
 
-      // 3. Execute tasks (simple sequential for now — parallel is a future concern)
-      for (const task of todos) {
+      // 3. Execute tasks sequentially
+      for (let i = 0; i < todos.length; i++) {
+        const task = todos[i];
+        log.push(`▶ [${i + 1}/${todos.length}] ${task.id}: ${task.description.slice(0, 60)}`);
+
         await this.runAgent("engineer", this.buildTaskPrompt(slug, task));
+
         if (task.critical) {
-          await this.runAgent("auditor", `Audit task ${task.id} in mission ${slug}. Read the evidence and verify acceptance criteria.`);
+          log.push(`🔍 Auditing ${task.id}...`);
+          await this.runAgent("auditor", `Audit task ${task.id} in mission ${slug}. Read the evidence in .opencode/todo/${slug}.md and verify acceptance criteria.`);
         }
       }
 
-      console.log(`[lazycrew] mission '${slug}' completed`);
+      log.push(`✅ Mission '${slug}' completed — ${todos.length} tasks done`);
+      return log;
     } catch (err) {
-      console.error(`[lazycrew] mission '${slug}' failed:`, err);
+      log.push(`❌ Mission failed: ${String(err).slice(0, 200)}`);
+      return log;
     } finally {
       this.active = false;
     }

@@ -2,7 +2,21 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] - 2026-06-22
+## [1.2.1] - 2026-06-22
+
+### Fix: Loading animation disappears and mission appears stuck
+
+**Root cause:** `start_mission` tool was fire-and-forget — it returned immediately with "Mission started" text while the pipeline ran silently in the background. The strategist had nothing to do, so the loading animation stopped. When the user typed something, the strategist woke up and "suddenly resumed."
+
+### Fixed
+- **`orchestrator.ts`**: `start()` now returns `Promise<string[]>` — a progress log array. NOT fire-and-forget. The tool call stays open until the pipeline finishes, so the loading animation stays visible.
+- **`index.ts`**: `start_mission` tool now `await`s the mission and returns the progress log (status lines with emoji: ▶ 📋 🔍 ✅).
+- **`orchestrator.ts`**: Added "How start_mission Works" section to strategist prompt — explains that the tool stays open and returns a log.
+- **`orchestrator.ts`**: Added "Compaction Recovery" section to strategist prompt — if context was compacted, check `.opencode/todo/` for unfinished missions and offer to resume.
+- **`orchestrator.ts`**: Architect prompt now includes the slug in the prompt so the plan/todo filenames match.
+- **`test/orchestrator.test.ts`**: 2 new tests for `start()` return type (14 total).
+
+## [1.2.0] - 2026-06-22
 
 ### Fresh start — minimal multi-agent orchestrator
 

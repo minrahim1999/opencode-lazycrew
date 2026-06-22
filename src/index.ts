@@ -99,10 +99,8 @@ const plugin: Plugin = async (input) => {
             .describe("Full task description"),
         },
         execute: async (args: { description: string }) => {
-          orch.start(args.description).catch((err) =>
-            console.error("[lazycrew] mission failed:", err),
-          );
-          return `Mission started: ${args.description.slice(0, 80)}`;
+          const log = await orch.start(args.description);
+          return log.join("\n");
         },
       }),
 
