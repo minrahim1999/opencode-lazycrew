@@ -175,7 +175,7 @@ export class Orchestrator {
   /** Start a mission — architect → engineers → auditor */
   async start(description: string): Promise<void> {
     if (this.active) {
-      console.warn("[orchestrator] mission already active");
+      console.warn("[lazycrew] mission already active");
       return;
     }
     this.active = true;
@@ -188,7 +188,7 @@ export class Orchestrator {
       // 2. Read todos
       const todos = await this.readTodos(slug);
       if (todos.length === 0) {
-        console.warn("[orchestrator] no todos produced by architect");
+        console.warn("[lazycrew] no todos produced by architect");
         return;
       }
 
@@ -200,9 +200,9 @@ export class Orchestrator {
         }
       }
 
-      console.log(`[orchestrator] mission '${slug}' completed`);
+      console.log(`[lazycrew] mission '${slug}' completed`);
     } catch (err) {
-      console.error(`[orchestrator] mission '${slug}' failed:`, err);
+      console.error(`[lazycrew] mission '${slug}' failed:`, err);
     } finally {
       this.active = false;
     }
@@ -215,7 +215,12 @@ export class Orchestrator {
       this.client.v2?.session?.close?.({ id: sid }).catch(() => {});
     }
     this.sessions.clear();
-    console.log("[orchestrator] aborted");
+    console.log("[lazycrew] aborted");
+  }
+
+  /** Switch automation mode at runtime */
+  setAutomation(value: boolean): void {
+    this.automation = value;
   }
 
   /** Delegate a one-off task to an agent */

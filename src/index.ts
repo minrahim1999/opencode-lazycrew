@@ -2,7 +2,7 @@
  * opencode-lazycrew — minimal multi-agent pipeline for OpenCode.
  *
  * Flow: user types task → strategist asks "proceed?" → architect plans
- * → engineers execute in parallel → auditor verifies → done.
+ * → engineers execute → auditor verifies → done.
  *
  * Config in opencode.json:
  *   { "plugin": [["opencode-lazycrew", { "automation": false, "ponytail": "full" }]] }
@@ -10,6 +10,10 @@
  * - automation: false (default) = human gates via question tool
  * - automation: true = fully autonomous, no gates
  * - ponytail: "off" | "lite" | "full" (default) | "ultra"
+ *
+ * Both settings can be switched at runtime via the `lazycrew_config` tool.
+ * Plans and todos are saved as files (.opencode/plans/, .opencode/todo/).
+ * Sessions are managed by OpenCode natively. No state management needed.
  */
 
 import type { Plugin } from "@opencode-ai/plugin";
@@ -30,13 +34,13 @@ const plugin: Plugin = async (input) => {
       )
     : null;
   const opts = (Array.isArray(entry) ? entry[1] : null) ?? {};
-  const automation = opts.automation === true;
-  const ponytailLevel = PONYTAIL.normalize(opts.ponytail);
 
-  // Register agents in opencode config
+  // Mutable runtime config — switchable via lazycrew_config tool
+  let automation = opts.automation === true;
+  let ponytailLevel = PONYTAIL.normalize(opts.ponytail);
+
+  // Register agents (based on initial automation setting)
   const agents = Orchestrator.agents(automation);
-
-  // Create orchestrator instance
   const orch = new Orchestrator({ client, directory, automation });
 
   return {
@@ -55,7 +59,7 @@ const plugin: Plugin = async (input) => {
     tool: {
       start_mission: tool({
         description:
-          "Start the multi-agent pipeline: architect plans, engineers execute in parallel, auditor verifies. Call AFTER user confirms via question tool.",
+          "Start the multi-agent pipeline: architect plans, engineers execute, auditor verifies. Call AFTER user confirms via question tool.",
         args: {
           description: tool.schema
             .string()
@@ -63,7 +67,7 @@ const plugin: Plugin = async (input) => {
         },
         execute: async (args: { description: string }) => {
           orch.start(args.description).catch((err) =>
-            console.error("[orchestrator] mission failed:", err),
+            console.error("[lazycrew] mission failed:", err),
           );
           return `Mission started: ${args.description.slice(0, 80)}`;
         },
@@ -89,6 +93,37 @@ const plugin: Plugin = async (input) => {
         },
         execute: async (args: { agent: string; prompt: string }) => {
           return await orch.delegate(args.agent, args.prompt);
+        },
+      }),
+
+      lazycrew_config: tool({
+        description:
+          "Switch automation and/or ponytail settings at runtime. No restart needed. Pass only the fields you want to change.",
+        args: {
+          automation: tool.schema
+            .boolean()
+            .optional()
+            .describe("true = fully autonomous (no human gates), false = human interaction"),
+          ponytail: tool.schema
+            .string()
+            .optional()
+            .describe("Ponytail level: off, lite, full, or ultra"),
+        },
+        execute: async (args: { automation?: boolean; ponytail?: string }) => {
+          const changes: string[] = [];
+          if (args.automation !== undefined) {
+            automation = args.automation;
+            orch.setAutomation(automation);
+            changes.push(`automation = ${automation ? "ON (autonomous)" : "OFF (human gates)"}`);
+          }
+          if (args.ponytail !== undefined) {
+            ponytailLevel = PONYTAIL.normalize(args.ponytail);
+            changes.push(`ponytail = ${ponytailLevel}`);
+          }
+          if (changes.length === 0) {
+            return `Current settings — automation: ${automation ? "ON" : "OFF"}, ponytail: ${ponytailLevel}`;
+          }
+          return `Updated: ${changes.join(", ")}`;
         },
       }),
     },

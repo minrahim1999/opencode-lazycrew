@@ -115,6 +115,29 @@ When the architect marks `phase-gate: yes` on the last task of a phase, the stra
 - `start_mission` — Launch the pipeline (strategist calls this after user confirms)
 - `abort_mission` — Abort all active missions
 - `delegate_task` — Delegate a one-off subtask to a specific agent
+- `lazycrew_config` — Switch automation and/or ponytail at runtime (no restart needed)
+
+### Switching settings at runtime
+
+The `lazycrew_config` tool lets the strategist (or user) change settings without restarting OpenCode:
+
+```
+lazycrew_config({ automation: true })          → turn on autonomous mode
+lazycrew_config({ ponytail: "ultra" })         → max laziness
+lazycrew_config({ automation: false, ponytail: "lite" })  → change both
+lazycrew_config({})                            → just check current settings
+```
+
+## Persistence & Sessions
+
+**No state management.** The plugin is stateless:
+
+- **Plans** → saved as files: `.opencode/plans/{slug}/plan.md`
+- **Todos** → saved as files: `.opencode/todo/{slug}.md`
+- **Sessions** → managed by OpenCode natively (conversation history, compaction, session list)
+- **Mission state** → ephemeral boolean (`active` or not). No database, no state.json, no MissionStore
+
+Files on disk are the only persistence. If OpenCode restarts mid-mission, the plan and todos are still there — the user can tell the strategist to resume.
 
 ## Ponytail
 
