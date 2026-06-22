@@ -69,10 +69,6 @@ The tool call stays open while the pipeline runs. This is normal — the loading
 - NEVER do work yourself — delegate to architect (plan), engineer (code), auditor (verify).
 - After compaction, re-read .opencode/todo/{slug}.md to reconstruct state.
 
-## Phase Gates (automation: false only)
-- When architect marks phase-gate: yes on a task → PAUSE, call question tool with "Continue/Hold/Modify".
-- On "Continue" → resume execution. On "Hold" → wait.
-
 ## Compaction Recovery
 If you notice your context was compacted (missing earlier conversation):
 1. Check if .opencode/todo/ has any .md files — if yes, a mission was in progress
@@ -83,17 +79,17 @@ If you notice your context was compacted (missing earlier conversation):
 const ARCHITECT_PROMPT = `You are the Architect — you write plans and todo lists. You NEVER write code.
 
 1. Read the mission description
-2. Decompose into phases and tasks (≤30 min each)
+2. Decompose into tasks (≤30 min each)
 3. Write plan to .opencode/plans/{slug}/plan.md
 4. Write todos to .opencode/todo/{slug}.md
 
-Todo format:
-- [ ] TASK-001: Description (@engineer, critical-path: yes/no, phase-gate: yes/no)
+Todo format (use EXACTLY this format):
+- [ ] TASK-001: Description (@engineer, critical-path: yes/no)
   - Acceptance: Verifiable condition
   - Depends: []
 
-Phase gate: put phase-gate: yes on the LAST task of each phase (if multi-phase).
-Single-phase missions run fully automatically — no gates needed.`;
+Mark critical-path: yes for tasks that need auditor verification (security, data loss, money).
+Single-phase missions run fully automatically.`;
 
 const ENGINEER_PROMPT = `You are the Engineer — you implement code. You NEVER plan or audit.
 
@@ -126,6 +122,11 @@ const SPECIALIST_PROMPT = `You are the Specialist — you diagnose stuck mission
 
 // ─── Orchestrator class ──────────────────────────────────────────────────────
 
+/** Per-agent call timeout — lazy getter so tests can override via env */
+function getAgentTimeoutMs(): number {
+  return Number(process.env.LAZYCREW_TEST_TIMEOUT) || 5 * 60 * 1000;
+}
+
 export class Orchestrator {
   private client: any;
   private directory: string;
@@ -147,15 +148,11 @@ export class Orchestrator {
 
   /** Agent configs for the config hook */
   static agents(automation: boolean): Record<string, AgentCfg> {
-    const gateInstruction = automation
-      ? "Automation mode — NO phase gates. All tasks run automatically."
-      : "Manual mode — pause at phase gates and call question tool.";
-
     return {
       strategist: {
         mode: "primary",
         description: "Primary agent — detects tasks, drives pipeline",
-        prompt: `${STRATEGIST_PROMPT}\n\n${gateInstruction}`,
+        prompt: STRATEGIST_PROMPT,
         temperature: 0.3,
         tools: { ...READ_ONLY, start_mission: true, abort_mission: true, delegate_task: true, lazycrew_config: true },
         permission: { ...READ_ONLY, start_mission: "allow", abort_mission: "allow", delegate_task: "allow", lazycrew_config: "allow" },
@@ -212,7 +209,7 @@ export class Orchestrator {
     try {
       // 1. Architect plans
       log.push(`▶ Architect planning: ${slug}`);
-      const archResult = await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission. Use slug: ${slug}`);
+      await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission. Use slug: ${slug}`);
       log.push(`📋 Architect done`);
 
       // 2. Read todos
@@ -272,7 +269,7 @@ export class Orchestrator {
     console.log("[lazycrew] abort requested");
   }
 
-  /** Switch automation mode at runtime */
+  /** Switch automation mode at runtime (affects next start_mission) */
   setAutomation(value: boolean): void {
     this.automation = value;
   }
@@ -298,7 +295,6 @@ export class Orchestrator {
     if (!sid) throw new Error(`Failed to create session for ${agent}`);
 
     try {
-      // Pass model to session.prompt — critical for subagent model resolution
       const promptOpts: any = {
         sessionID: sid,
         directory: this.directory,
@@ -306,35 +302,34 @@ export class Orchestrator {
         parts: [{ type: "text", text: prompt }],
       };
 
-      // Only pass model if we have one for this agent
+      // Pass model to session.prompt if we have one
       const model = this.models[agent];
       if (model) {
-        const [providerID, modelID] = model.includes("/")
-          ? model.split("/")
-          : [undefined, model];
-        if (providerID && modelID) {
-          promptOpts.model = { providerID, modelID };
+        const slashIdx = model.indexOf("/");
+        if (slashIdx > 0) {
+          promptOpts.model = {
+            providerID: model.slice(0, slashIdx),
+            modelID: model.slice(slashIdx + 1),
+          };
         }
       }
 
-      const result = await this.client.v2.session.prompt(promptOpts);
+      // Race against timeout — don't let a hung subagent block forever
+      const result = await Promise.race([
+        this.client.v2.session.prompt(promptOpts),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Agent ${agent} timed out after ${getAgentTimeoutMs() / 1000}s`)), getAgentTimeoutMs()),
+        ),
+      ]);
 
-      // Extract text from result
-      const parts = result?.data?.parts ?? result?.parts ?? [];
+      const parts = (result as any)?.data?.parts ?? (result as any)?.parts ?? [];
       return parts
         .filter((p: any) => p.type === "text" && p.text)
         .map((p: any) => p.text)
         .join("\n");
     } finally {
-      // Always close the session — don't leak
-      try {
-        await this.client.v2?.session?.close?.({ id: sid });
-      } catch {}
+      try { await this.client.v2?.session?.close?.({ id: sid }); } catch {}
     }
-  }
-
-  private slugify(s: string): string {
-    return slugify(s);
   }
 
   private buildTaskPrompt(slug: string, task: Task): string {
@@ -366,14 +361,37 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40).replace(/^-|-$/g, "");
 }
 
+/**
+ * Parse todos — lenient format matching.
+ * Accepts: TASK-001, Task-001, task-001, TASK-1, etc.
+ * Also accepts plain numbered tasks: 1., 1), etc.
+ */
 function parseTodos(content: string): Task[] {
   const tasks: Task[] = [];
   const lines = content.split("\n");
+  let counter = 0;
+
   for (const line of lines) {
-    const m = line.match(/^\s*- \[ \] (TASK-\d+):\s*(.+?)$/);
-    if (m) {
+    // Match: - [ ] TASK-001: Description...  (case-insensitive)
+    const m1 = line.match(/^\s*- \[ \] (?:TASK-)?(\d+):\s*(.+?)$/i);
+    if (m1) {
+      const num = m1[1];
+      const id = `TASK-${num.padStart(3, "0")}`;
       const critical = /critical-path:\s*yes/i.test(line);
-      tasks.push({ id: m[1], description: m[2].trim(), critical });
+      tasks.push({ id, description: m1[2].trim(), critical });
+      continue;
+    }
+
+    // Match: - [ ] Description... (no task ID — auto-assign)
+    const m2 = line.match(/^\s*- \[ \] (.+?)$/);
+    if (m2 && !line.includes("[x]")) {
+      counter++;
+      const id = `TASK-${String(counter).padStart(3, "0")}`;
+      const desc = m2[1].trim();
+      // Skip if it looks like metadata (starts with - or @)
+      if (desc.startsWith("@") || desc.startsWith("Depends:") || desc.startsWith("Acceptance:")) continue;
+      const critical = /critical-path:\s*yes/i.test(line);
+      tasks.push({ id, description: desc, critical });
     }
   }
   return tasks;

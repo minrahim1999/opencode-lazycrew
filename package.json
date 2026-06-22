@@ -1,6 +1,6 @@
 {
   "name": "opencode-lazycrew",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Minimal multi-agent pipeline for OpenCode — strategist → architect → engineer → auditor with ponytail lazy-dev ruleset baked in.",
   "type": "module",
   "main": "dist/index.js",

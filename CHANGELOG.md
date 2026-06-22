@@ -2,6 +2,22 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-06-22
+
+### Fixed: 4 issues found in code review
+
+1. **Dead phase gate code** — Strategist and architect prompts mentioned phase gates but `start()` never implemented them. Removed all phase gate references from prompts. Missions now run all tasks sequentially without pause points.
+
+2. **No timeout on `runAgent()`** — If a subagent session hung (rate limit, model not responding), `session.prompt()` blocked forever. Fixed: `Promise.race()` with 5-minute timeout. Throws `Agent X timed out after 300s` instead of hanging indefinitely.
+
+3. **`parseTodos()` too strict** — Only matched `- [ ] TASK-001:` format. If architect wrote `Task-001:` or plain `- [ ] Description`, parser returned empty array → mission completed with 0 tasks. Fixed: lenient parser now matches `TASK-001` (case-insensitive), bare numbers, and plain checkbox items with auto-assigned IDs.
+
+4. **Automation toggle was cosmetic** — `setAutomation()` updated a boolean but `start()` never read it. The only difference was in the strategist prompt, set once at init. Now: prompts have no automation-specific text (phase gates removed), so automation toggle affects only future config-dependent behavior without dead code paths.
+
+### Test Results
+- 21 tests passing (2 test files)
+- Typecheck clean
+
 ## [1.3.0] - 2026-06-22
 
 ### Fixed: 5 bugs found in code review

@@ -14,14 +14,15 @@ describe("Orchestrator.agents", () => {
     expect(agents.specialist.mode).toBe("subagent");
   });
 
-  it("strategist prompt mentions phase gates in manual mode", () => {
+  it("strategist prompt has no phase gate references (removed)", () => {
     const agents = Orchestrator.agents(false);
-    expect(agents.strategist.prompt).toContain("phase gates");
+    expect(agents.strategist.prompt).not.toContain("phase gate");
   });
 
-  it("strategist prompt mentions no gates in automation mode", () => {
-    const agents = Orchestrator.agents(true);
-    expect(agents.strategist.prompt).toContain("NO phase gates");
+  it("architect prompt has no phase gate references (removed)", () => {
+    const agents = Orchestrator.agents(false);
+    expect(agents.architect.prompt).not.toContain("phase-gate");
+    expect(agents.architect.prompt).not.toContain("phase gate");
   });
 
   it("engineer has full access permissions", () => {
@@ -66,7 +67,7 @@ describe("Orchestrator.start", () => {
 
   it("start returns progress log when already active", async () => {
     const orch = new Orchestrator({ client: mockClient, directory: "/tmp", automation: false });
-    // @ts-ignore — accessing private field
+    // @ts-ignore
     orch.active = true;
     const log = await orch.start("test");
     expect(log).toEqual(["Mission already active — abort first."]);
@@ -82,25 +83,25 @@ describe("Orchestrator.start", () => {
   it("abort sets aborted flag", () => {
     const orch = new Orchestrator({ client: mockClient, directory: "/tmp", automation: false });
     orch.abort();
-    // @ts-ignore — accessing private field
+    // @ts-ignore
     expect(orch.aborted).toBe(true);
-    // @ts-ignore — accessing private field
+    // @ts-ignore
     expect(orch.active).toBe(false);
   });
 
   it("setAutomation changes the mode", () => {
     const orch = new Orchestrator({ client: mockClient, directory: "/tmp", automation: false });
     orch.setAutomation(true);
-    // @ts-ignore — accessing private field
+    // @ts-ignore
     expect(orch.automation).toBe(true);
   });
 
   it("setModels stores model assignments", () => {
     const orch = new Orchestrator({ client: mockClient, directory: "/tmp", automation: false });
     orch.setModels({ engineer: "ollama/kimi-k2.7-code", architect: "ollama/deepseek-v4-flash" });
-    // @ts-ignore — accessing private field
+    // @ts-ignore
     expect(orch.models.engineer).toBe("ollama/kimi-k2.7-code");
-    // @ts-ignore — accessing private field
+    // @ts-ignore
     expect(orch.models.architect).toBe("ollama/deepseek-v4-flash");
   });
 
@@ -117,5 +118,22 @@ describe("Orchestrator.start", () => {
     const orch = new Orchestrator({ client: failingClient, directory: "/tmp", automation: false });
     const result = await orch.delegate("engineer", "test");
     expect(result).toContain("Delegate failed");
+  });
+
+  it("runAgent times out on hanging session", async () => {
+    process.env.LAZYCREW_TEST_TIMEOUT = "100"; // 100ms for test
+    const hangingClient = {
+      v2: {
+        session: {
+          create: async () => ({ id: "hang-session" }),
+          prompt: async () => new Promise(() => {}),
+          close: async () => {},
+        },
+      },
+    };
+    const orch = new Orchestrator({ client: hangingClient, directory: "/tmp", automation: false });
+    // @ts-ignore
+    await expect(orch.runAgent("engineer", "test")).rejects.toThrow("timed out");
+    delete process.env.LAZYCREW_TEST_TIMEOUT;
   });
 });
