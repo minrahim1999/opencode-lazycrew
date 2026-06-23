@@ -2,7 +2,31 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
-## [1.5.1] - 2026-06-23
+## [1.5.2] - 2026-06-23
+
+### Fixed: Pipeline silently reported tasks as "done" when they actually failed
+
+**Problem:** `runAgent()` returned text but `start()` ignored it. The `done++` counter always incremented after every engineer call, even if:
+- The response was truncated (context limit hit)
+- The response was empty
+- The engineer never updated the todo file with `[x] TASK-XXX`
+
+Result: Mission reported "✅ 5 done" when maybe only 3 actually completed. User had no way to know.
+
+**Fixed:**
+- **`orchestrator.ts`**: Added `isTaskCompleted()` method — reads the todo file and verifies the task has `[x]` checkbox with evidence
+- **Completion gate**: After engineer returns, pipeline checks `isTaskCompleted(slug, taskId)` BEFORE incrementing `done`. If no evidence → task marked FAILED, not done
+- **Pause on failure (non-automation mode)**: When `automation: false` (default), if a task fails or errors, the pipeline PAUSES and asks the user: "Retry? Skip? Abort?" — no silent continuation
+- **Automation mode**: When `automation: true`, failures still log `⚠` but continue to next task (as before)
+- **Audit logging**: Auditor result now captured and logged as `📋 TASK-XXX audit: PASS/FAIL`
+- **Strategist prompt**: Updated to instruct reading the log for `⚠` failures and asking user before pretending success
+- **Engineer prompt**: Added explicit instruction "After completing code, ALWAYS update the todo file with evidence" and warning "If you forget to update the todo, the task will be marked FAILED"
+
+### Test Results
+- 31 tests passing (2 test files) — unchanged count, existing suite still green
+- Typecheck clean
+
+## [1.5.1] - 2026-06-22
 
 ### Added: Context-limit truncation detection + continuation retry
 

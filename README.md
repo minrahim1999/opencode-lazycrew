@@ -99,11 +99,15 @@ Strategist calls start_mission tool
     ↓
 Architect: writes .opencode/plans/{slug}/plan.md + .opencode/todo/{slug}.md
     ↓
-Engineer(s): execute tasks, update todos with evidence
+Engineer(s): execute tasks, update todos with evidence [x]
+    ↓
+    VERIFIED — todo has [x] TASK-XXX with evidence?
+    ✅ yes → mark done
+    ❌ no → mark FAILED, pause (ask: Retry? Skip? Abort?)
     ↓
 Auditor: verifies critical-path tasks (PASS/FAIL)
     ↓
-Strategist: summarizes results to user
+Strategist: reads log, summarizes results. If failures → asks user.
 ```
 
 ## Tools
@@ -138,6 +142,17 @@ Files on disk are the only persistence. If OpenCode restarts mid-mission, the pl
 ## Resilience: Context-Limit Handling
 
 If a subagent hits its model's context limit and stops mid-generation (sudden stop), lazycrew automatically detects the truncation and requests a continuation — up to 2 retries. The full response is assembled and returned to the pipeline, so missions don't derail from partial output.
+
+## Task Verification
+
+After each engineer completes a task, lazycrew verifies the todo file was actually updated with `[x] TASK-XXX` evidence BEFORE marking it "done". If the engineer:
+- Hit context limit and stopped before updating
+- Forgot to update the todo
+- Produced empty response
+
+→ the task is marked **FAILED**, not done. In non-automation mode (`automation: false`), the pipeline PAUSES and asks you: "Retry? Skip? Abort?" — no silent failures.
+
+In automation mode (`automation: true`), failures are logged as `⚠` and the pipeline continues to remaining tasks, with a final summary showing `X done, Y failed`.
 
 ## Ponytail
 

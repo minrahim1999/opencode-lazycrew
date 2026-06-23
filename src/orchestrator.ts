@@ -52,15 +52,23 @@ const STRATEGIST_PROMPT = `You are the Strategist — the primary agent of LazyC
 3. Task with enough detail → call question tool with plan summary + "Proceed?" + options [Proceed, Cancel, Modify].
 4. Task too vague → call question tool asking for clarification.
 5. User selects "Proceed" → call start_mission tool with the full description.
-6. Wait for mission completion → summarize results.
+6. Wait for mission completion → read the progress log carefully.
+7. If ANY task shows ⚠ FAILED or "not completed" → call question tool: "X/Y tasks completed. Some failed. Retry failed tasks? Skip? Abort?"
+8. If ALL tasks show ✅ → summarize results to user.
 
 ## How start_mission Works
 The start_mission tool RUNS the full pipeline (architect → engineer → auditor) and RETURNS when done. It returns a progress log with status lines. You will see output like:
   ▶ Architect planning: build-auth
   📋 5 tasks planned
   ▶ [1/5] TASK-001: Set up database schema
+  ✅ TASK-001 completed
   🔍 Auditing TASK-001...
-  ✅ Mission 'build-auth' completed — 5 tasks done
+  📋 TASK-001 audit: PASS
+  ✅ Mission 'build-auth' completed — 5 done, 0 failed
+
+OR if tasks failed:
+  ⚠ TASK-003 failed: no evidence of completion
+  ⚠ Mission 'build-auth' completed with failures — 4 done, 1 failed
 
 The tool call stays open while the pipeline runs. This is normal — the loading animation stays visible. When it returns, read the log and summarize results to the user.
 
@@ -68,6 +76,7 @@ The tool call stays open while the pipeline runs. This is normal — the loading
 - ALWAYS call the 'question' tool for interactions. NEVER write plain text questions.
 - NEVER do work yourself — delegate to architect (plan), engineer (code), auditor (verify).
 - After compaction, re-read .opencode/todo/{slug}.md to reconstruct state.
+- If mission log shows failures, DO NOT pretend everything succeeded. Ask the user what to do.
 
 ## Compaction Recovery
 If you notice your context was compacted (missing earlier conversation):
@@ -89,7 +98,9 @@ Todo format (use EXACTLY this format):
   - Depends: []
 
 Mark critical-path: yes for tasks that need auditor verification (security, data loss, money).
-Single-phase missions run fully automatically.`;
+Single-phase missions run fully automatically.
+
+IMPORTANT: After writing the todo file, read it back to confirm all tasks are listed correctly.`;
 
 const ENGINEER_PROMPT = `You are the Engineer — you implement code. You NEVER plan or audit.
 
@@ -99,6 +110,13 @@ const ENGINEER_PROMPT = `You are the Engineer — you implement code. You NEVER 
 4. Update todo checkbox when done: - [x] TASK-XXX: ... (Evidence: ...)
 5. If blocked after 2 attempts → call 'question' tool. Never write plain text.
 6. If task feels > 30 min → call 'question' tool suggesting split. Never write plain text.
+7. After completing code, ALWAYS update the todo file with evidence before finishing.
+
+## Evidence Format
+When marking a task complete, update the todo line like this:
+- [x] TASK-001: Description (Evidence: created auth.js with login/logout handlers)
+
+If you forget to update the todo, the task will be marked FAILED.
 
 ## Safety
 - NEVER write outside the project directory
@@ -233,17 +251,36 @@ export class Orchestrator {
         log.push(`▶ [${i + 1}/${todos.length}] ${task.id}: ${task.description.slice(0, 60)}`);
 
         try {
-          await this.runAgent("engineer", this.buildTaskPrompt(slug, task));
-          done++;
+          const result = await this.runAgent("engineer", this.buildTaskPrompt(slug, task));
+          
+          // Verify the task was actually completed by checking todo file
+          const isCompleted = await this.isTaskCompleted(slug, task.id);
+          
+          if (isCompleted) {
+            log.push(`✅ ${task.id} completed`);
+            done++;
+          } else {
+            log.push(`⚠ ${task.id} failed: no evidence of completion in todo file`);
+            failed++;
+            // Don't continue to next task if this one failed — ask user
+            if (!this.automation) {
+              log.push(`⏸ Mission paused — task ${task.id} incomplete. Retry? Skip? Abort?`);
+              break;
+            }
+          }
 
-          if (task.critical) {
+          if (isCompleted && task.critical) {
             log.push(`🔍 Auditing ${task.id}...`);
-            await this.runAgent("auditor", `Audit task ${task.id} in mission ${slug}. Read the evidence in .opencode/todo/${slug}.md and verify acceptance criteria.`);
+            const auditResult = await this.runAgent("auditor", `Audit task ${task.id} in mission ${slug}. Read the evidence in .opencode/todo/${slug}.md and verify acceptance criteria.`);
+            log.push(`📋 ${task.id} audit: ${auditResult?.includes("FAIL") ? "FAIL" : "PASS"}`);
           }
         } catch (err) {
           failed++;
           log.push(`⚠ ${task.id} failed: ${String(err).slice(0, 100)}`);
-          // Continue to next task — don't abort the whole mission
+          if (!this.automation) {
+            log.push(`⏸ Mission paused — task ${task.id} errored. Retry? Skip? Abort?`);
+            break;
+          }
         }
       }
 
@@ -368,6 +405,30 @@ export class Orchestrator {
       return parseTodos(content);
     } catch {
       return [];
+    }
+  }
+
+  /** Check if a specific task was marked complete in the todo file */
+  private async isTaskCompleted(slug: string, taskId: string): Promise<boolean> {
+    try {
+      const content = readFileSync(
+        join(this.directory, ".opencode", "todo", `${slug}.md`),
+        "utf-8",
+      );
+      // Look for the task with [x] checkbox
+      const lines = content.split("\n");
+      for (const line of lines) {
+        const taskMatch = line.match(/^\s*- \[x\]\s*(TASK-\d+|[\d]+):?\s*(.+?)$/i);
+        if (taskMatch) {
+          const id = taskMatch[1].startsWith("TASK-") 
+            ? taskMatch[1] 
+            : `TASK-${taskMatch[1].padStart(3, "0")}`;
+          if (id === taskId) return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
     }
   }
 }
