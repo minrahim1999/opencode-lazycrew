@@ -52,15 +52,27 @@ The plugin registers 5 agents automatically via the `config` hook. You don't nee
 
 ### Model Assignment
 
-Pick models that fit each role:
+Pick models that fit each role. **Only these three fields are user-configurable** for lazycrew agents:
 
-- **strategist** → reasoning model (e.g. `deepseek-v4-flash`) — classifies tasks, drives flow
-- **architect** → cheap planning model (e.g. `gemini-3-flash-preview`) — decomposes into tasks
-- **engineer** → coding model (e.g. `kimi-k2.7-code`, `qwen3-coder-next`) — writes code
-- **auditor** → cheap fast model (e.g. `gemini-3-flash-preview`) — verifies outputs
-- **specialist** → reasoning model (e.g. `deepseek-v4-flash`) — diagnoses stuck missions
+- `model` — which model runs the agent (e.g. `ollama/deepseek-v4-flash`)
+- `temperature` — creativity / determinism (default: 0.3 for strategist, 0.2 for engineer, etc.)
+- `skills` — additional skills to load (e.g. `["dox-system"]`)
 
-Use any provider: `ollama/`, `openai/`, `anthropic/`, `google/`, or omit for local models.
+Example minimal config:
+
+```json
+{
+  "agent": {
+    "strategist": { "model": "ollama/deepseek-v4-flash" },
+    "architect":  { "model": "ollama/glm-5.1" },
+    "engineer":   { "model": "ollama/kimi-k2.7-code" },
+    "auditor":    { "model": "ollama/qwen3.5:9b" },
+    "specialist": { "model": "ollama/deepseek-v4-flash" }
+  }
+}
+```
+
+**Do NOT set** `permission`, `tools`, `mode`, `prompt`, `description`, `maxTokens`, or `steps` on lazycrew agents. These are locked by the plugin.
 
 ### Agent Permissions (auto-set by plugin)
 
@@ -72,7 +84,7 @@ Use any provider: `ollama/`, `openai/`, `anthropic/`, `google/`, or omit for loc
 | auditor | ❌ | ❌ | ✅ | ✅ | ✅ |
 | specialist | ❌ | ❌ | ❌ | ✅ | ✅ |
 
-You don't need to set these — the plugin handles it.
+You don't need to set these — the plugin handles it. Since v1.5.4, lazycrew agent configs are **guard-railed**: only `model`, `temperature`, and `skills` are user-overridable. Since v1.5.5, the strategist can properly invoke the `question` tool for "Proceed?" gates.
 
 ## Config Options
 

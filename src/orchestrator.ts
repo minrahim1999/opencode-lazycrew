@@ -82,8 +82,9 @@ The tool call stays open while the pipeline runs. This is normal — the loading
 If you notice your context was compacted (missing earlier conversation):
 1. Check if .opencode/todo/ has any .md files — if yes, a mission was in progress
 2. Read the todo file to see what's done ([x]) vs pending ([ ])
-3. Tell the user: "Found mission in progress. Completed: X/Y. Resume?"
-4. If user says yes → call start_mission with the remaining tasks`;
+3. Tell the user: "Found mission in progress. Completed: X/Y. Restart?"
+4. If user says yes → call start_mission with the original description. Note: this RESTARTS the full pipeline from the beginning, not a resume.
+5. If user says no → summarize what was completed so far.`;
 
 const ARCHITECT_PROMPT = `You are the Architect — you write plans and todo lists. You NEVER write code.
 
@@ -172,7 +173,7 @@ export class Orchestrator {
         description: "Primary agent — detects tasks, drives pipeline",
         prompt: STRATEGIST_PROMPT,
         temperature: 0.3,
-        tools: { ...READ_ONLY, start_mission: true, abort_mission: true, delegate_task: true, lazycrew_config: true },
+        tools: { ...READ_ONLY, start_mission: true, abort_mission: true, delegate_task: true, lazycrew_config: true, question: true },
         permission: { ...READ_ONLY, start_mission: "allow", abort_mission: "allow", delegate_task: "allow", lazycrew_config: "allow" },
       },
       architect: {
@@ -204,7 +205,7 @@ export class Orchestrator {
         prompt: SPECIALIST_PROMPT,
         temperature: 0.4,
         tools: READ_ONLY,
-        permission: READ_ONLY,
+        permission: PLAN_WRITE,
       },
     };
   }
@@ -348,6 +349,8 @@ export class Orchestrator {
             providerID: model.slice(0, slashIdx),
             modelID: model.slice(slashIdx + 1),
           };
+        } else {
+          console.warn(`[lazycrew] Invalid model format "${model}" for agent "${agent}". Expected "provider/model". Falling back to default.`);
         }
       }
 

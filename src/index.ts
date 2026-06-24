@@ -83,9 +83,19 @@ const plugin: Plugin = async (input) => {
       // Capture model assignments from user config
       const models: Record<string, string | undefined> = {};
 
+      /** Whitelist merge: only model, temperature, skills can be overridden.
+       *  Everything else (tools, permission, mode, prompt, description)
+       *  is locked to plugin defaults. If user tries to override them,
+       *  we discard their values and keep ours. */
+      const ALLOWED_OVERRIDES = ["model", "temperature", "skills"];
+
       for (const [name, cfg] of Object.entries(agents)) {
         const userCfg = config.agent[name] ?? {};
-        config.agent[name] = { ...cfg, ...userCfg };
+        const merged: any = { ...cfg };
+        for (const key of ALLOWED_OVERRIDES) {
+          if (userCfg[key] !== undefined) merged[key] = userCfg[key];
+        }
+        config.agent[name] = merged;
         // Capture model if user set one
         if (userCfg.model) {
           models[name] = userCfg.model;
@@ -135,6 +145,10 @@ const plugin: Plugin = async (input) => {
           prompt: tool.schema.string().describe("Task prompt for the agent"),
         },
         execute: async (args: { agent: string; prompt: string }) => {
+          const validAgents = ["architect", "engineer", "auditor", "specialist"];
+          if (!validAgents.includes(args.agent)) {
+            return `Error: "${args.agent}" is not a valid lazycrew agent. Valid agents: ${validAgents.join(", ")}`;
+          }
           return await orch.delegate(args.agent, args.prompt);
         },
       }),

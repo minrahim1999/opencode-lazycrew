@@ -2,6 +2,76 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.5] - 2026-06-24
+
+### Fixed: Strategist couldn't show question modal (missing `question` tool)
+
+**Problem:** The strategist prompt instructs: *"ALWAYS call the 'question' tool for interactions. NEVER write plain text questions."* But the strategist's `tools` object in `orchestrator.ts` only included `start_mission`, `abort_mission`, `delegate_task`, and `lazycrew_config`. `question` was missing. The strategist had `question: "allow"` in `permission`, but without the tool registration, it couldn't actually invoke the question modal.
+
+**Result:** Instead of showing the "Proceed?" question modal, the strategist either wrote plain text questions (which users can't interact with) or silently proceeded without asking. The pipeline gate was broken.
+
+**Fixed:** Added `question: true` to strategist's `tools` object. Now strategist can properly invoke the question tool for "Proceed?" gates and failure recovery prompts.
+
+**Tests:** 31 tests passing, build clean.
+
+## [1.5.4] - 2026-06-24
+
+### Changed: Agent config is now guard-railed — only model, temperature, skills are user-overridable
+
+**Problem:** Even after v1.5.3's deep-merge fix, users could still accidentally or intentionally override `permission`, `tools`, `mode`, `prompt`, or `description` in their `opencode.json`. This was a foot-gun — one bad agent config could silently break the pipeline again.
+
+**Changed:**
+- **`index.ts` config hook**: Whitelist merge. Only three keys can be overridden from `opencode.json`:
+  - `model` — which model runs the agent
+  - `temperature` — creativity / determinism
+  - `skills` — additional skills to load
+- Everything else (`permission`, `tools`, `mode`, `prompt`, `description`, `maxTokens`, `steps`, etc.) is **locked** to plugin defaults. If the user sets them, they are **discarded**.
+- This makes lazycrew agents a sealed unit: you pick the model and temperature, we handle permissions, tools, prompts, and behavior.
+
+### Fixed: Specialist could not write diagnosis (permission mismatch)
+
+**Problem:** Specialist prompt instructed: *"Write diagnosis to .opencode/todo/{slug}.md: DIAGNOSIS: ..."* but the agent config had `permission: READ_ONLY` (no write access). When strategist delegated to specialist on a stuck mission, specialist got permission-denied and failed silently.
+
+**Fixed:** `orchestrator.ts`: Specialist permission changed from `READ_ONLY` to `PLAN_WRITE` (same as architect — can write to `.opencode/plans/`, `.opencode/todo/`, and `AGENTS.md` only).
+
+### Fixed: Compaction recovery prompt lied about "resume"
+
+**Problem:** Strategist prompt said: *"If user says yes → call start_mission with the remaining tasks"* — but `start_mission` tool has no "remaining tasks" parameter. It always restarts the full pipeline. User expected resume, got restart.
+
+**Fixed:** Updated strategist prompt to say "Restart?" and explicitly note: *"this RESTARTS the full pipeline from the beginning, not a resume."*
+
+### Fixed: `delegate_task` accepted any agent name without validation
+
+**Problem:** If strategist hallucinated and delegated to `"build"` or `"explore"`, the tool silently ran it. Might work, might fail weirdly, no feedback.
+
+**Fixed:** `index.ts`: Added validation in `delegate_task` tool — rejects invalid agent names with explicit error listing valid options.
+
+### Added: Warning for invalid model format
+
+**Problem:** Model strings without `provider/` prefix (e.g. `"kimi-k2.7-code"` instead of `"ollama/kimi-k2.7-code"`) silently fell back to the global default. User thought they assigned a model but didn't.
+
+**Fixed:** `orchestrator.ts`: Added `console.warn` when model format is invalid, so the user knows immediately.
+
+### Test Results
+- 31 tests passing (2 test files) — unchanged count, existing suite still green
+- Build clean
+
+## [1.5.3] - 2026-06-24
+
+### Fixed: Permission clobbering in config merge
+
+**Problem:** Plugin used shallow object merge (`{ ...cfg, ...userCfg }`) in the config hook. When `opencode.json` defined agent-level `permission` or `tools` objects (even partial ones), they **replaced** the plugin's defaults entirely.
+
+Result: strategist lost `start_mission`, `delegate_task`, and `lazycrew_config` tools silently. Could not drive the pipeline. Fell back to `task` tool → spawned built-in subagents (`explore`, `general`, `scout`) instead of custom agents.
+
+**Fixed:**
+- **`index.ts`**: Replaced shallow merge with `deepMerge()` that recursively merges nested objects (`permission`, `tools`, etc.) while replacing arrays
+- User overrides still work at the leaf level (e.g. change `edit` from `"allow"` to `"deny"`)
+- Plugin's required permissions (`start_mission: "allow"`, etc.) are preserved even if user's config doesn't mention them
+
+### Test Results
+- Build clean (`npm run build`)
+
 ## [1.5.2] - 2026-06-23
 
 ### Fixed: Pipeline silently reported tasks as "done" when they actually failed
