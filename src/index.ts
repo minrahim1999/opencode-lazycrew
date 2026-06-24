@@ -1,8 +1,8 @@
 /**
- * opencode-lazycrew — minimal multi-agent pipeline for OpenCode.
+ * opencode-lazycrew — minimal multi-agent pipeline for OpenCode (v1.6.0 extremist).
  *
- * Flow: user types task → strategist asks "proceed?" → architect plans
- * → engineers execute → auditor verifies → done.
+ * Flow: user types task → strategist checks lazycrew_state → asks resume?
+ * → asks "proceed?" → architect plans → engineers execute → auditor verifies → done.
  *
  * Config in opencode.json:
  *   { "plugin": [["opencode-lazycrew", { "automation": false, "ponytail": "full" }]] }
@@ -155,14 +155,26 @@ const plugin: Plugin = async (input) => {
 
       lazycrew_state: tool({
         description:
-          "Check the current mission state. Call this after timeout or compaction to see if a mission was interrupted.",
+          "Check the current mission state and scan for incomplete todos. Call this on first interaction to offer resume, or after timeout/compaction.",
         args: {},
         execute: async () => {
           const recovery = orch.recoverMission();
+          const incomplete = orch.scanIncompleteMissions();
+          
+          if (incomplete.length > 0) {
+            const lines = incomplete.map((m) => 
+              `- ${m.slug}: ${m.done}/${m.total} done, ${m.failed} remaining`
+            );
+            if (recovery) {
+              return `${recovery}\n\nAlso found incomplete todos from other missions:\n${lines.join("\n")}\n\nUse start_mission to restart, or delegate_task to retry individual tasks.`;
+            }
+            return `Incomplete missions found:\n${lines.join("\n")}\n\nUse start_mission with the mission description to resume, or delegate_task for specific tasks.`;
+          }
+          
           if (recovery) {
             return `${recovery}\n\nUse start_mission to restart, or delegate_task to retry individual failed tasks.`;
           }
-          return "No mission in progress or interrupted.";
+          return "No incomplete missions found. Ready to start new mission.";
         },
       }),
 

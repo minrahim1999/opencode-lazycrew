@@ -1,14 +1,21 @@
 /**
- * Orchestrator — the pipeline engine.
+ * Orchestrator — the pipeline engine (v1.6.0 extremist mode).
  *
  * strategist (primary) → architect (plan + todos) → engineer → auditor
  *
+ * Extremist guarantees:
+ * 1. .opencode/ always exists + .gitignore always contains .opencode
+ * 2. Plan written to .opencode/plans/{slug}/plan.md before execution
+ * 3. Todo written to .opencode/todo/{slug}.md before execution
+ * 4. Plan = procedure document; Todo = execution checklist (different files)
+ * 5. Engineer MUST update todo checkbox; if not → strict retry
+ * 6. Startup resume check via strategist prompt + lazycrew_state
+ * 7. Plugin enforces everything; agents only generate content
+ *
  * Uses OpenCode SDK: session.create + session.prompt.
- * session.create only accepts { title?, parentID? }.
- * session.prompt accepts { agent, model, parts }.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 // ─── Agent configs ───────────────────────────────────────────────────────────
@@ -40,6 +47,7 @@ const PLAN_WRITE = {
   write: {
     ".opencode/plans/*": "allow", ".opencode/plans/**": "allow",
     ".opencode/todo/*": "allow", ".opencode/todo/**": "allow",
+    ".gitignore": "allow",
     "AGENTS.md": "allow", "*": "deny",
   },
 };
@@ -52,14 +60,16 @@ const STRATEGIST_PROMPT = `You are the Strategist — the primary agent of LazyC
 3. Task with enough detail → call question tool with plan summary + "Proceed?" + options [Proceed, Cancel, Modify].
 4. Task too vague → call question tool asking for clarification.
 5. User selects "Proceed" → call start_mission tool with the full description.
-6. Wait for mission completion → read the progress log carefully.
-7. If ANY task shows ⚠ FAILED or "not completed" → call question tool: "X/Y tasks completed. Some failed. Retry failed tasks? Skip? Abort?"
-8. If ALL tasks show ✅ → summarize results to user.
+6. BEFORE any mission, call lazycrew_state tool to check for incomplete todos. If incomplete mission found, ask user "Resume 'X'?" with options [Resume, Start New, Cancel].
+7. Wait for mission completion → read the progress log carefully.
+8. If ANY task shows ⚠ FAILED or "not completed" → call question tool: "X/Y tasks completed. Some failed. Retry failed tasks? Skip? Abort?"
+9. If ALL tasks show ✅ → summarize results to user.
 
 ## How start_mission Works
 The start_mission tool RUNS the full pipeline (architect → engineer → auditor) and RETURNS when done. It returns a progress log with status lines. You will see output like:
   ▶ Architect planning: build-auth
-  📋 5 tasks planned
+  📋 Plan written: .opencode/plans/build-auth/plan.md
+  📋 Todo written: .opencode/todo/build-auth.md (5 tasks)
   ▶ [1/5] TASK-001: Set up database schema
   ✅ TASK-001 completed
   🔍 Auditing TASK-001...
@@ -75,35 +85,79 @@ The tool call stays open while the pipeline runs. This is normal — the loading
 ## Rules
 - ALWAYS call the 'question' tool for interactions. NEVER write plain text questions.
 - NEVER do work yourself — delegate to architect (plan), engineer (code), auditor (verify).
-- After compaction, re-read .opencode/todo/{slug}.md to reconstruct state.
+- After compaction, call lazycrew_state to check for interrupted missions.
 - If mission log shows failures, DO NOT pretend everything succeeded. Ask the user what to do.
+- NEVER start a new mission without checking lazycrew_state first.
 
 ## Compaction Recovery
 If you notice your context was compacted (missing earlier conversation):
 1. Call lazycrew_state tool to check if a mission was interrupted.
-2. If it reports an interrupted mission, ask the user: "Mission 'X' was interrupted (Y/Z tasks). Restart?"
-3. If user says yes → call start_mission with the original description (restarts full pipeline).
-4. If user says no → summarize what was completed so far.`;
+2. If it reports an incomplete mission, ask the user: "Mission 'X' was interrupted (Y/Z tasks). Resume or start new?"
+3. If user says resume → call start_mission with the original description.
+4. If user says start new → proceed normally.
+5. If user says no → summarize what was completed so far.`;
 
 const ARCHITECT_PROMPT = `You are the Architect — you write plans and todo lists. You NEVER write code.
 
+## Your Job (in this exact order)
 1. Read the mission description
 2. Decompose into tasks (≤30 min each)
-3. Write plan to .opencode/plans/{slug}/plan.md
-4. Write todos to .opencode/todo/{slug}.md
+3. Write a PROCEDURE document to .opencode/plans/{slug}/plan.md
+4. Write a TODO checklist to .opencode/todo/{slug}.md
 
-Todo format (use EXACTLY this format):
-- [ ] TASK-001: Description (@engineer, critical-path: yes/no)
+## Plan Format (.opencode/plans/{slug}/plan.md)
+Use this exact structure:
+
+# Plan: {Mission Title}
+
+## Overview
+1-2 sentence summary of what this mission accomplishes.
+
+## Procedure
+For each task, write a section like:
+
+### Step 1: TASK-001 — {Title}
+**What to change:** Specific files, functions, or components.
+**How:** Detailed implementation approach.
+**Why:** Rationale for this approach.
+**Acceptance:** Verifiable condition that proves completion.
+**Depends:** [] (or list of TASK-XXX that must complete first)
+
+### Step 2: TASK-002 — {Title}
+... repeat for each task ...
+
+## Rollback Plan
+If something breaks, how to revert.
+
+## Notes
+Any assumptions, dependencies, or warnings.
+
+## Todo Format (.opencode/todo/{slug}.md)
+Use EXACTLY this format:
+
+# Todo: {Mission Title}
+
+- [ ] TASK-001: Description here (@engineer, critical-path: yes/no)
   - Acceptance: Verifiable condition
   - Depends: []
 
-Mark critical-path: yes for tasks that need auditor verification (security, data loss, money).
-Single-phase missions run fully automatically.
+- [ ] TASK-002: Description here (@engineer, critical-path: yes/no)
+  - Acceptance: Verifiable condition
+  - Depends: [TASK-001]
 
-IMPORTANT: After writing the todo file, read it back to confirm all tasks are listed correctly.`;
+Mark critical-path: yes for tasks that need auditor verification (security, data loss, money).
+
+## CRITICAL RULES
+- After writing BOTH files, read them back to confirm they exist and are correct.
+- The plan.md is the PROCEDURE — it explains WHAT to do and WHY.
+- The todo.md is the CHECKLIST — it lists tasks with checkboxes for tracking.
+- NEVER combine them into one file. They serve different purposes.
+- If the write tool fails, retry up to 2 times.
+- Single-phase missions run fully automatically.`;
 
 const ENGINEER_PROMPT = `You are the Engineer — you implement code. You NEVER plan or audit.
 
+## Your Job
 1. Read assigned task and ALL referenced files
 2. Follow .opencode/todo/{slug}.md exactly — do not invent extra work
 3. Write minimal, correct code
@@ -112,11 +166,19 @@ const ENGINEER_PROMPT = `You are the Engineer — you implement code. You NEVER 
 6. If task feels > 30 min → call 'question' tool suggesting split. Never write plain text.
 7. After completing code, ALWAYS update the todo file with evidence before finishing.
 
-## Evidence Format
-When marking a task complete, update the todo line like this:
+## Evidence Format (MANDATORY)
+When marking a task complete, update the todo line like this EXACTLY:
 - [x] TASK-001: Description (Evidence: created auth.js with login/logout handlers)
 
-If you forget to update the todo, the task will be marked FAILED.
+The Evidence field MUST describe what file was changed and what was done.
+If you forget to update the todo, the task will be marked FAILED and you will be forced to retry.
+
+## Retry Rule
+If you are called back to update a todo that you forgot to update:
+1. Read the todo file
+2. Find your task
+3. Change [ ] to [x] and add Evidence
+4. Do NOT re-implement the code — just update the checkbox
 
 ## Safety
 - NEVER write outside the project directory
@@ -213,10 +275,34 @@ export class Orchestrator {
   }
 
   /**
+   * Ensure .opencode directory exists and .gitignore contains .opencode
+   * This is called by the plugin itself, not by agents.
+   */
+  private ensureWorkspace(): void {
+    // 1. Create .opencode directories
+    mkdirSync(join(this.directory, ".opencode", "plans"), { recursive: true });
+    mkdirSync(join(this.directory, ".opencode", "todo"), { recursive: true });
+
+    // 2. Ensure .gitignore contains .opencode
+    const gitignorePath = join(this.directory, ".gitignore");
+    let gitignoreContent = "";
+    try {
+      gitignoreContent = readFileSync(gitignorePath, "utf-8");
+    } catch {
+      // .gitignore doesn't exist yet — create it
+    }
+    const lines = gitignoreContent.split("\n").map((l) => l.trim());
+    if (!lines.includes(".opencode") && !lines.includes(".opencode/")) {
+      const separator = gitignoreContent.endsWith("\n") ? "" : "\n";
+      const entry = gitignoreContent ? `${separator}# LazyCrew workspace\n.opencode\n` : "# LazyCrew workspace\n.opencode\n";
+      writeFileSync(gitignorePath, gitignoreContent + entry, "utf-8");
+    }
+  }
+
+  /**
    * Start a mission — architect → engineer(s) → auditor.
    * Returns a progress log (array of status lines).
-   * NOT fire-and-forget — the tool call stays open until done,
-   * so the loading animation stays visible.
+   * NOT fire-and-forget — the tool call stays open until done.
    */
   async start(description: string): Promise<string[]> {
     if (this.active) {
@@ -228,11 +314,11 @@ export class Orchestrator {
     const log: string[] = [];
 
     try {
-      // Ensure directories exist
-      mkdirSync(join(this.directory, ".opencode", "plans", slug), { recursive: true });
-      mkdirSync(join(this.directory, ".opencode", "todo"), { recursive: true });
+      // ─── Phase 0: Enforce workspace structure ──────────────────────────────
+      this.ensureWorkspace();
+      log.push("🔧 Workspace enforced: .opencode/ + .gitignore");
 
-      // Write mission state file (for timeout/compaction recovery)
+      // Write mission state file
       this.currentSlug = slug;
       this.saveState({
         slug,
@@ -244,12 +330,43 @@ export class Orchestrator {
         tasksFailed: 0,
       });
 
-      // 1. Architect plans
+      // ─── Phase 1: Architect plans (plan + todo) ────────────────────────────
       log.push(`▶ Architect planning: ${slug}`);
-      await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission. Use slug: ${slug}`);
-      log.push(`📋 Architect done`);
+      const planPath = join(this.directory, ".opencode", "plans", slug, "plan.md");
+      const todoPath = join(this.directory, ".opencode", "todo", `${slug}.md`);
 
-      // 2. Read todos
+      // Retry architect up to 2 times if files are missing
+      let architectAttempts = 0;
+      const maxArchitectAttempts = 2;
+      while (architectAttempts <= maxArchitectAttempts) {
+        await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan to .opencode/plans/${slug}/plan.md and the todo list to .opencode/todo/${slug}.md for this mission. Use slug: ${slug}`);
+
+        // Verify BOTH files exist
+        const planExists = existsSync(planPath);
+        const todoExists = existsSync(todoPath);
+
+        if (planExists && todoExists) {
+          log.push(`📋 Plan written: .opencode/plans/${slug}/plan.md`);
+          log.push(`📋 Todo written: .opencode/todo/${slug}.md`);
+          break;
+        }
+
+        const missing: string[] = [];
+        if (!planExists) missing.push("plan.md");
+        if (!todoExists) missing.push("todo.md");
+        log.push(`⚠ Architect missing: ${missing.join(", ")}`);
+
+        if (architectAttempts >= maxArchitectAttempts) {
+          log.push(`❌ Architect failed to produce required files after ${maxArchitectAttempts + 1} attempts`);
+          this.saveState({ status: "error", error: `Missing files: ${missing.join(", ")}` });
+          return log;
+        }
+
+        architectAttempts++;
+        log.push(`🔄 Retrying architect (${architectAttempts}/${maxArchitectAttempts})...`);
+      }
+
+      // ─── Phase 2: Read and parse todos ─────────────────────────────────────
       const todos = await this.readTodos(slug);
       if (todos.length === 0) {
         log.push("⚠ No todos produced by architect — check .opencode/todo/");
@@ -259,7 +376,7 @@ export class Orchestrator {
       log.push(`📋 ${todos.length} tasks planned`);
       this.saveState({ tasksTotal: todos.length, status: "executing" });
 
-      // 3. Execute tasks sequentially
+      // ─── Phase 3: Execute tasks sequentially ─────────────────────────────────
       let done = 0;
       let failed = 0;
       for (let i = 0; i < todos.length; i++) {
@@ -272,24 +389,41 @@ export class Orchestrator {
         log.push(`▶ [${i + 1}/${todos.length}] ${task.id}: ${task.description.slice(0, 60)}`);
 
         try {
+          // Run engineer
           const result = await this.runAgent("engineer", this.buildTaskPrompt(slug, task));
-          
-          // Verify the task was actually completed by checking todo file
-          const isCompleted = await this.isTaskCompleted(slug, task.id);
-          
+
+          // ─── Phase 3b: Force todo update verification ──────────────────────
+          let isCompleted = await this.isTaskCompleted(slug, task.id);
+
+          if (!isCompleted) {
+            // Engineer forgot to update todo — force retry with strict prompt
+            log.push(`⚠ ${task.id}: missing todo update — forcing retry`);
+            const retryPrompt = `STRICT RETRY — You forgot to update the todo checkbox for ${task.id}.
+
+1. Read .opencode/todo/${slug}.md
+2. Find the line for ${task.id}
+3. Change [ ] to [x] and add Evidence: what file you changed and what you did
+4. Do NOT re-implement any code — only update the checkbox
+
+Your previous work was: ${result?.slice(0, 200) || "(no output recorded)"}`;
+
+            await this.runAgent("engineer", retryPrompt);
+            isCompleted = await this.isTaskCompleted(slug, task.id);
+          }
+
           if (isCompleted) {
             log.push(`✅ ${task.id} completed`);
             done++;
           } else {
-            log.push(`⚠ ${task.id} failed: no evidence of completion in todo file`);
+            log.push(`⚠ ${task.id} failed: todo still not updated after retry`);
             failed++;
-            // Don't continue to next task if this one failed — ask user
             if (!this.automation) {
               log.push(`⏸ Mission paused — task ${task.id} incomplete. Retry? Skip? Abort?`);
               break;
             }
           }
 
+          // ─── Phase 3c: Audit critical-path tasks ──────────────────────────
           if (isCompleted && task.critical) {
             log.push(`🔍 Auditing ${task.id}...`);
             const auditResult = await this.runAgent("auditor", `Audit task ${task.id} in mission ${slug}. Read the evidence in .opencode/todo/${slug}.md and verify acceptance criteria.`);
@@ -305,6 +439,7 @@ export class Orchestrator {
         }
       }
 
+      // ─── Phase 4: Finalize ─────────────────────────────────────────────────
       if (this.aborted) {
         log.push(`⏹ Mission '${slug}' aborted — ${done} done, ${failed} failed`);
         this.saveState({ status: "aborted", tasksDone: done, tasksFailed: failed });
@@ -377,6 +512,33 @@ export class Orchestrator {
     } catch (err) {
       console.warn("[lazycrew] could not save state:", err);
     }
+  }
+
+  /**
+   * Scan all todo files and return incomplete missions.
+   * Used by strategist on first interaction to offer resume.
+   */
+  scanIncompleteMissions(): { slug: string; total: number; done: number; failed: number }[] {
+    const incomplete: { slug: string; total: number; done: number; failed: number }[] = [];
+    const todoDir = join(this.directory, ".opencode", "todo");
+    try {
+      const { readdirSync, statSync } = require("node:fs");
+      const entries = readdirSync(todoDir);
+      for (const entry of entries) {
+        if (!entry.endsWith(".md")) continue;
+        const slug = entry.replace(/\.md$/, "");
+        const content = readFileSync(join(todoDir, entry), "utf-8");
+        const total = (content.match(/^\s*- \[ \]/gm) || []).length + (content.match(/^\s*- \[x\]/gm) || []).length;
+        const done = (content.match(/^\s*- \[x\]/gm) || []).length;
+        const failed = (content.match(/^\s*- \[ \]/gm) || []).length;
+        if (failed > 0 && done > 0) {
+          incomplete.push({ slug, total, done, failed });
+        }
+      }
+    } catch {
+      // todo dir doesn't exist yet
+    }
+    return incomplete;
   }
 
   /** Recover from timeout/compaction — returns summary of previous mission */
@@ -521,8 +683,8 @@ export class Orchestrator {
       for (const line of lines) {
         const taskMatch = line.match(/^\s*- \[x\]\s*(TASK-\d+|[\d]+):?\s*(.+?)$/i);
         if (taskMatch) {
-          const id = taskMatch[1].startsWith("TASK-") 
-            ? taskMatch[1] 
+          const id = taskMatch[1].startsWith("TASK-")
+            ? taskMatch[1]
             : `TASK-${taskMatch[1].padStart(3, "0")}`;
           if (id === taskId) return true;
         }

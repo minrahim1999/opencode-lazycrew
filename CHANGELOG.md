@@ -2,6 +2,53 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-06-25
+
+### Added: Extremist Enforcement Mode
+
+**Problem:** In v1.5.x, agents were told to write plans and todos, but there was no enforcement. Architects could skip files. Engineers could forget todo updates. The plugin trusted agents and hoped for the best. This caused silent failures, incomplete missions, and lost work.
+
+**Fixed — "Extremist" guarantees:**
+
+1. **Workspace Auto-Enforcement** — `start_mission` now calls `ensureWorkspace()` which:
+   - Creates `.opencode/plans/` and `.opencode/todo/` directories via `mkdirSync(..., { recursive: true })`
+   - Reads `.gitignore` and appends `.opencode` if not already present
+   - This is done by the **plugin directly**, not delegated to agents
+
+2. **Mandatory Plan + Todo** — After architect runs, the plugin **verifies both files exist**:
+   - `.opencode/plans/{slug}/plan.md` (procedure document)
+   - `.opencode/todo/{slug}.md` (execution checklist)
+   - If either is missing → retries architect up to 2 times
+   - If still missing after retries → aborts mission with clear error
+
+3. **Plan vs Todo Separation** — Architect prompt now explicitly distinguishes:
+   - **Plan** = procedure document (what, how, why, acceptance criteria, rollback)
+   - **Todo** = execution checklist (checkboxes with TASK-XXX IDs, Evidence field)
+   - Two separate files, two separate purposes. No combining allowed.
+
+4. **Force Todo Update** — After engineer completes a task:
+   - Plugin reads todo file, searches for `[x] TASK-XXX`
+   - **Not found?** → Engineer is **force-retried** with strict prompt: "You forgot to update the todo. Read the file, find your task, change `[ ]` to `[x]`, add Evidence. Do NOT re-implement any code."
+   - Still not found after retry? → Marked FAILED, not done
+   - No silent failures. No "assume done."
+
+5. **Startup Resume Check** — `lazycrew_state` tool now:
+   - Scans `.opencode/todo/*.md` for any file with unchecked tasks (`[ ]`)
+   - Returns all incomplete missions with progress counts (e.g. "`build-auth`: 3/5 done, 2 remaining")
+   - Strategist prompt updated: **"NEVER start a new mission without checking `lazycrew_state` first"**
+   - If incomplete missions found → strategist asks user: "Resume 'X'?" with [Resume, Start New, Cancel]
+
+### Changed
+- **Architect prompt** — Now includes explicit plan format with Overview, Procedure (per-task sections), Rollback Plan, and Notes. Todo format now requires Evidence field.
+- **Engineer prompt** — Added "Retry Rule" section: "If called back to update a todo you forgot, do NOT re-implement — just update the checkbox."
+- **Strategist prompt** — Added startup resume check. Step 6 now requires calling `lazycrew_state` before any mission. Compaction recovery also updated.
+- **Architect permissions** — `.gitignore` added to `PLAN_WRITE` allowlist so architect can write it if needed (though plugin handles it directly).
+
+### Tests
+- 40 tests passing (up from 31)
+- New tests: workspace enforcement, architect retry, engineer force-retry, incomplete mission scanning, mission recovery
+- Build clean
+
 ## [1.5.6] - 2026-06-24
 
 ### Fixed: Plugin never created `.opencode/plans/` or `.opencode/todo/` directories

@@ -1,8 +1,8 @@
 # opencode-lazycrew
 
-**Minimal multi-agent pipeline for OpenCode.**
+**Minimal multi-agent pipeline for OpenCode — now with extremist enforcement.**
 
-Strategist → Architect → Engineer(s) → Auditor. Ponytail lazy-dev ruleset baked in. No commands needed.
+Strategist → Architect → Engineer(s) → Auditor. Ponytail lazy-dev ruleset baked in. No commands needed. **Every project auto-enforces `.opencode/` + `.gitignore`. Plans and todos are mandatory, verified, and retry-forced.**
 
 ## Quick Start
 
@@ -103,31 +103,47 @@ You don't need to set these — the plugin handles it. Since v1.5.4, lazycrew ag
 ```
 User types task
     ↓
-Strategist: "This is a task. Here's my plan. Proceed?"
+Strategist: calls lazycrew_state to check for incomplete missions
+    ↓
+If incomplete found → "Resume 'X' (Y/Z done)?" [Resume, Start New, Cancel]
+If none → "Here's my plan. Proceed?" [Proceed, Cancel, Modify]
     ↓ (question modal)
 User selects "Proceed"
     ↓
 Strategist calls start_mission tool
     ↓
-Architect: writes .opencode/plans/{slug}/plan.md + .opencode/todo/{slug}.md
+Phase 0: Plugin enforces workspace (.opencode/ + .gitignore)
     ↓
-Engineer(s): execute tasks, update todos with evidence [x]
+Phase 1: Architect writes plan + todo
+    → .opencode/plans/{slug}/plan.md (procedure document)
+    → .opencode/todo/{slug}.md (execution checklist)
+    → Plugin verifies BOTH files exist, retries architect if missing
     ↓
-    VERIFIED — todo has [x] TASK-XXX with evidence?
-    ✅ yes → mark done
-    ❌ no → mark FAILED, pause (ask: Retry? Skip? Abort?)
+Phase 2: Engineer(s) execute tasks, update todos with evidence [x]
+    → Plugin verifies todo checkbox updated after each task
+    → If engineer forgot → FORCE RETRY with strict "update checkbox only" prompt
+    → If still not updated after retry → mark FAILED
     ↓
-Auditor: verifies critical-path tasks (PASS/FAIL)
+Phase 3: Auditor verifies critical-path tasks (PASS/FAIL)
     ↓
 Strategist: reads log, summarizes results. If failures → asks user.
 ```
+
+### Plan vs Todo: Two Files, Two Purposes
+
+| File | Purpose | Content |
+|------|---------|---------|
+| `.opencode/plans/{slug}/plan.md` | **Procedure** | What to do, how, why. Step-by-step implementation guide with acceptance criteria, dependencies, rollback plan. |
+| `.opencode/todo/{slug}.md` | **Checklist** | Execution tracker. Each task has a checkbox `[ ]` → `[x]` with Evidence field. The source of truth for what's done. |
+
+The **plan** is read once at the start by the engineer for context. The **todo** is read and updated by every engineer task as the ground truth of completion.
 
 ## Tools
 
 - `start_mission` — Launch the pipeline (strategist calls this after user confirms)
 - `abort_mission` — Abort all active missions
 - `delegate_task` — Delegate a one-off subtask to a specific agent
-- `lazycrew_state` — Check if a mission was interrupted (timeout/compaction recovery)
+- `lazycrew_state` — **Check for incomplete missions on startup** + timeout/compaction recovery. Returns all unfinished todos with progress counts.
 - `lazycrew_config` — Switch automation and/or ponytail at runtime (no restart needed)
 
 ### Switching settings at runtime
@@ -156,16 +172,31 @@ If OpenCode restarts mid-mission or the strategist times out, call `lazycrew_sta
 
 If a subagent hits its model's context limit and stops mid-generation (sudden stop), lazycrew automatically detects the truncation and requests a continuation — up to 2 retries. The full response is assembled and returned to the pipeline, so missions don't derail from partial output.
 
-## Task Verification
+## Task Verification (Extremist Mode)
 
-After each engineer completes a task, lazycrew verifies the todo file was actually updated with `[x] TASK-XXX` evidence BEFORE marking it "done". If the engineer:
-- Hit context limit and stopped before updating
-- Forgot to update the todo
-- Produced empty response
+After each engineer completes a task, lazycrew **verifies the todo file was actually updated** with `[x] TASK-XXX` evidence BEFORE marking it "done". This is enforced — not optional.
 
-→ the task is marked **FAILED**, not done. In non-automation mode (`automation: false`), the pipeline PAUSES and asks you: "Retry? Skip? Abort?" — no silent failures.
+### Verification Flow
+1. Engineer runs task
+2. Plugin reads todo file, searches for `[x] TASK-XXX`
+3. **Found?** → ✅ mark done, continue to audit if critical-path
+4. **Not found?** → ⚠️ **FORCE RETRY**
+   - Engineer re-called with strict prompt: "You forgot to update the todo. Read the file, find your task, change `[ ]` to `[x]`, add Evidence. Do NOT re-implement any code."
+   - Plugin re-checks todo file after retry
+5. **Still not found after retry?** → ❌ mark FAILED
+   - `automation: false`: Pipeline PAUSES, asks user: "Retry? Skip? Abort?"
+   - `automation: true`: Logs `⚠ TASK-XXX failed`, continues to next task
 
-In automation mode (`automation: true`), failures are logged as `⚠` and the pipeline continues to remaining tasks, with a final summary showing `X done, Y failed`.
+### Why Force Retry?
+Engineers frequently forget to update todos after coding. In v1.5.x, this silently marked tasks as failed. In v1.6.0, the plugin **forces** the engineer back with a specific "update checkbox only" instruction. No code rewrite, no guessing — just the checkbox update.
+
+### What Triggers Failure
+- Context limit hit before todo update (truncated response)
+- Engineer forgot to update the todo after implementing
+- Empty response from engineer
+- Todo file missing or corrupted
+
+In all cases: no evidence = not done. No exceptions.
 
 ## Ponytail
 
@@ -193,7 +224,15 @@ Intensity levels:
 npm test
 ```
 
-31 tests covering ponytail ruleset (16), agent configuration, and pipeline execution (15).
+40 tests covering:
+- Ponytail ruleset (16 tests)
+- Agent configuration + permissions (10 tests)
+- Workspace enforcement + .gitignore (1 test)
+- Architect retry when files missing (1 test)
+- Engineer force-retry when todo not updated (1 test)
+- Incomplete mission scanning (2 tests)
+- Mission state recovery (3 tests)
+- Pipeline execution + timeout handling (6 tests)
 
 ## License
 
