@@ -48,7 +48,7 @@ The plugin registers 5 agents automatically via the `config` hook. You don't nee
 | **architect** | Subagent | subagent | Writes plans + todo lists (read-only, no code) |
 | **engineer** | Subagent | subagent | Implements code (full access: edit, write, bash) |
 | **auditor** | Subagent | subagent | Verifies critical-path tasks (read + bash, no edit) |
-| **specialist** | Subagent | subagent | Diagnoses stuck missions (read-only) |
+| **specialist** | Subagent | subagent | Diagnoses stuck missions (plans+todos only) |
 
 ### Model Assignment
 
@@ -127,6 +127,7 @@ Strategist: reads log, summarizes results. If failures → asks user.
 - `start_mission` — Launch the pipeline (strategist calls this after user confirms)
 - `abort_mission` — Abort all active missions
 - `delegate_task` — Delegate a one-off subtask to a specific agent
+- `lazycrew_state` — Check if a mission was interrupted (timeout/compaction recovery)
 - `lazycrew_config` — Switch automation and/or ponytail at runtime (no restart needed)
 
 ### Switching settings at runtime
@@ -140,16 +141,16 @@ lazycrew_config({ automation: false, ponytail: "lite" })  → change both
 lazycrew_config({})                            → just check current settings
 ```
 
-## Persistence & Sessions
+## Persistence & Recovery
 
-**No state management.** The plugin is stateless:
+The plugin is mostly stateless:
 
 - **Plans** → saved as files: `.opencode/plans/{slug}/plan.md`
 - **Todos** → saved as files: `.opencode/todo/{slug}.md`
 - **Sessions** → managed by OpenCode natively (conversation history, compaction, session list)
-- **Mission state** → ephemeral boolean (`active` or not). No database, no state.json, no MissionStore
+- **Mission state** → saved as `.opencode/lazycrew-state.json` (status, progress, timestamps)
 
-Files on disk are the only persistence. If OpenCode restarts mid-mission, the plan and todos are still there — the user can tell the strategist to resume.
+If OpenCode restarts mid-mission or the strategist times out, call `lazycrew_state` to see if a mission was interrupted and how far it got.
 
 ## Resilience: Context-Limit Handling
 

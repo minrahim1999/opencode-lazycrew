@@ -153,6 +153,19 @@ const plugin: Plugin = async (input) => {
         },
       }),
 
+      lazycrew_state: tool({
+        description:
+          "Check the current mission state. Call this after timeout or compaction to see if a mission was interrupted.",
+        args: {},
+        execute: async () => {
+          const recovery = orch.recoverMission();
+          if (recovery) {
+            return `${recovery}\n\nUse start_mission to restart, or delegate_task to retry individual failed tasks.`;
+          }
+          return "No mission in progress or interrupted.";
+        },
+      }),
+
       lazycrew_config: tool({
         description:
           "Switch automation and/or ponytail settings at runtime. No restart needed. Pass only the fields you want to change.",

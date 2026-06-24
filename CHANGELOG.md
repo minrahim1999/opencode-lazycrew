@@ -2,6 +2,29 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.6] - 2026-06-24
+
+### Fixed: Plugin never created `.opencode/plans/` or `.opencode/todo/` directories
+
+**Problem:** The architect prompt instructed: *"Write plan to .opencode/plans/{slug}/plan.md"* and *"Write todos to .opencode/todo/{slug}.md"* — but the plugin never created these directories. When the architect tried to write via the `write` tool, the directories didn't exist and writes silently failed. No plan, no todos, no pipeline.
+
+**Fixed:** `start_mission` now calls `mkdirSync(..., { recursive: true })` for both directories before delegating to architect. Also fixed `tools` constants mixing `"allow"` strings with booleans — now all tools entries use booleans.
+
+### Added: Mission state tracking for timeout/compaction recovery
+
+**Problem:** After strategist timeout or context compaction, the plugin had no way to know if a mission was running. The strategist had to manually check `.opencode/todo/` files and guess at state.
+
+**Added:**
+- `lazycrew-state.json` file written to `.opencode/lazycrew-state.json` — tracks mission status, progress, timestamps
+- `lazycrew_state` tool — strategist can call this to check if a mission was interrupted and get a human-readable summary
+- `recoverMission()` method — returns contextual recovery message based on status (`completed`, `aborted`, `paused`, `executing`, `error`)
+- Updated strategist prompt: compaction recovery now says "Call `lazycrew_state` tool" instead of "check todo files"
+- Strategist now has `lazycrew_state` in both `tools` and `permission`
+
+### Tests
+- 31 tests passing, build clean
+- New `saveState`/`getMissionState`/`recoverMission` methods are internal and exercised via existing orchestrator tests
+
 ## [1.5.5] - 2026-06-24
 
 ### Fixed: Strategist couldn't show question modal (missing `question` tool)

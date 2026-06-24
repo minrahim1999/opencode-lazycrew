@@ -8,7 +8,7 @@
  * session.prompt accepts { agent, model, parts }.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 // ─── Agent configs ───────────────────────────────────────────────────────────
@@ -80,11 +80,10 @@ The tool call stays open while the pipeline runs. This is normal — the loading
 
 ## Compaction Recovery
 If you notice your context was compacted (missing earlier conversation):
-1. Check if .opencode/todo/ has any .md files — if yes, a mission was in progress
-2. Read the todo file to see what's done ([x]) vs pending ([ ])
-3. Tell the user: "Found mission in progress. Completed: X/Y. Restart?"
-4. If user says yes → call start_mission with the original description. Note: this RESTARTS the full pipeline from the beginning, not a resume.
-5. If user says no → summarize what was completed so far.`;
+1. Call lazycrew_state tool to check if a mission was interrupted.
+2. If it reports an interrupted mission, ask the user: "Mission 'X' was interrupted (Y/Z tasks). Restart?"
+3. If user says yes → call start_mission with the original description (restarts full pipeline).
+4. If user says no → summarize what was completed so far.`;
 
 const ARCHITECT_PROMPT = `You are the Architect — you write plans and todo lists. You NEVER write code.
 
@@ -153,11 +152,14 @@ export class Orchestrator {
   private active = false;
   private aborted = false;
   private models: Record<string, string | undefined> = {};
+  private currentSlug: string | null = null;
+  private stateFile: string;
 
   constructor(opts: { client: any; directory: string; automation: boolean }) {
     this.client = opts.client;
     this.directory = opts.directory;
     this.automation = opts.automation;
+    this.stateFile = join(this.directory, ".opencode", "lazycrew-state.json");
   }
 
   /** Capture model assignments from opencode.json (called from config hook) */
@@ -173,8 +175,8 @@ export class Orchestrator {
         description: "Primary agent — detects tasks, drives pipeline",
         prompt: STRATEGIST_PROMPT,
         temperature: 0.3,
-        tools: { ...READ_ONLY, start_mission: true, abort_mission: true, delegate_task: true, lazycrew_config: true, question: true },
-        permission: { ...READ_ONLY, start_mission: "allow", abort_mission: "allow", delegate_task: "allow", lazycrew_config: "allow" },
+        tools: { ...READ_ONLY, start_mission: true, abort_mission: true, delegate_task: true, lazycrew_config: true, lazycrew_state: true, question: true },
+        permission: { ...READ_ONLY, start_mission: "allow", abort_mission: "allow", delegate_task: "allow", lazycrew_config: "allow", lazycrew_state: "allow" },
       },
       architect: {
         mode: "subagent",
@@ -226,6 +228,22 @@ export class Orchestrator {
     const log: string[] = [];
 
     try {
+      // Ensure directories exist
+      mkdirSync(join(this.directory, ".opencode", "plans", slug), { recursive: true });
+      mkdirSync(join(this.directory, ".opencode", "todo"), { recursive: true });
+
+      // Write mission state file (for timeout/compaction recovery)
+      this.currentSlug = slug;
+      this.saveState({
+        slug,
+        description,
+        status: "planning",
+        startedAt: new Date().toISOString(),
+        tasksTotal: 0,
+        tasksDone: 0,
+        tasksFailed: 0,
+      });
+
       // 1. Architect plans
       log.push(`▶ Architect planning: ${slug}`);
       await this.runAgent("architect", `Mission: ${description}\n\nWrite the plan and todos for this mission. Use slug: ${slug}`);
@@ -235,9 +253,11 @@ export class Orchestrator {
       const todos = await this.readTodos(slug);
       if (todos.length === 0) {
         log.push("⚠ No todos produced by architect — check .opencode/todo/");
+        this.saveState({ status: "error", error: "No todos produced" });
         return log;
       }
       log.push(`📋 ${todos.length} tasks planned`);
+      this.saveState({ tasksTotal: todos.length, status: "executing" });
 
       // 3. Execute tasks sequentially
       let done = 0;
@@ -287,12 +307,18 @@ export class Orchestrator {
 
       if (this.aborted) {
         log.push(`⏹ Mission '${slug}' aborted — ${done} done, ${failed} failed`);
+        this.saveState({ status: "aborted", tasksDone: done, tasksFailed: failed });
+      } else if (failed > 0) {
+        log.push(`⚠ Mission '${slug}' completed with failures — ${done} done, ${failed} failed`);
+        this.saveState({ status: "paused", tasksDone: done, tasksFailed: failed });
       } else {
         log.push(`✅ Mission '${slug}' completed — ${done} done, ${failed} failed`);
+        this.saveState({ status: "completed", tasksDone: done, tasksFailed: failed });
       }
       return log;
     } catch (err) {
       log.push(`❌ Mission failed: ${String(err).slice(0, 200)}`);
+      this.saveState({ status: "error", error: String(err).slice(0, 200) });
       return log;
     } finally {
       this.active = false;
@@ -310,6 +336,78 @@ export class Orchestrator {
   /** Switch automation mode at runtime (affects next start_mission) */
   setAutomation(value: boolean): void {
     this.automation = value;
+  }
+
+  /** Get current mission state for strategist recovery */
+  getMissionState(): { active: boolean; slug: string | null; state: any } {
+    let state: any = null;
+    try {
+      const raw = readFileSync(this.stateFile, "utf-8");
+      state = JSON.parse(raw);
+    } catch {
+      // No state file — no active mission
+    }
+    return {
+      active: this.active,
+      slug: this.currentSlug,
+      state,
+    };
+  }
+
+  /** Save mission state to file (for timeout/compaction recovery) */
+  private saveState(updates: Partial<{
+    slug: string;
+    description: string;
+    status: string;
+    startedAt: string;
+    tasksTotal: number;
+    tasksDone: number;
+    tasksFailed: number;
+    error: string;
+  }>): void {
+    try {
+      let state: any = {};
+      try {
+        const raw = readFileSync(this.stateFile, "utf-8");
+        state = JSON.parse(raw);
+      } catch {
+        // State file doesn't exist yet
+      }
+      writeFileSync(this.stateFile, JSON.stringify({ ...state, ...updates }, null, 2) + "\n", "utf-8");
+    } catch (err) {
+      console.warn("[lazycrew] could not save state:", err);
+    }
+  }
+
+  /** Recover from timeout/compaction — returns summary of previous mission */
+  recoverMission(): string | null {
+    try {
+      const raw = readFileSync(this.stateFile, "utf-8");
+      const state = JSON.parse(raw);
+      if (!state.slug || !state.description) return null;
+
+      const total = state.tasksTotal || 0;
+      const done = state.tasksDone || 0;
+      const failed = state.tasksFailed || 0;
+
+      switch (state.status) {
+        case "completed":
+          return `Mission '${state.slug}' was completed (${done} done, ${failed} failed). No recovery needed.`;
+        case "aborted":
+          return `Mission '${state.slug}' was aborted (${done} done, ${failed} failed). Call start_mission to restart.`;
+        case "paused":
+          return `Mission '${state.slug}' is paused with failures (${done} done, ${failed} failed). Call delegate_task to retry failed tasks or start_mission to restart.`;
+        case "executing":
+        case "planning":
+          return `Mission '${state.slug}' was interrupted (status: ${state.status}, ${done}/${total} tasks). Call start_mission to restart from the beginning.`;
+        case "error":
+          return `Mission '${state.slug}' failed: ${state.error || "unknown error"}. Fix the issue, then call start_mission.`;
+        default:
+          return `Mission '${state.slug}' (status: ${state.status} — ${done}/${total} tasks). Call start_mission to restart.`;
+      }
+    } catch {
+      return null;
+    }
   }
 
   /** Delegate a one-off task to an agent */
