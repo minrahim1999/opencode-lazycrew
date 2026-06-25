@@ -2,6 +2,20 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.3] - 2026-06-25
+
+### Fixed: Strategist now reads/explores before deciding task vs question
+
+**Problem:** Your workflow is "ask first, then decide." The strategist was forbidden from reading files ("NEVER do work yourself"), so when you asked "can we use inappweb custom in `@lib/features/...`", it answered directly without reading the file.
+
+**Fixed:**
+- **READING is allowed** — strategist now reads relevant files when you mention paths
+- **Explore then decide** → reads code → decides if it's TASK or QUESTION → asks "Proceed?" if task
+- **TASK:** Mentions concrete changes ("use X instead of Y") → "Proceed?" gate → `start_mission`
+- **QUESTION:** Just asks "how does this work?" → answers based on what was read
+
+This matches your workflow: you ask, the strategist explores, decides if changes are needed, and only runs the pipeline if you confirm "Proceed."
+
 ## [1.6.2] - 2026-06-25
 
 ### Fixed: Task detection for file-path prompts
