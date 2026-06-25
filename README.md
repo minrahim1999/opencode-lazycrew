@@ -36,7 +36,7 @@ Add to `~/.config/opencode/opencode.json`:
 }
 ```
 
-That's it. The plugin auto-registers all agents with their prompts, permissions, and roles. You only need to set the **model** for each agent — everything else is handled.
+That's it. The plugin auto-registers all agents with their prompts, permissions, and roles. You only need to set the **model** for each agent — everything else is handled. `.opencode/` and `.gitignore` are created automatically on plugin load — no mission required.
 
 ## How Agents Work
 

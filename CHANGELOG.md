@@ -2,6 +2,22 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] - 2026-06-25
+
+### Fixed: Workspace not created for non-mission interactions
+
+**Problem:** In v1.6.0, `.opencode/` was only created inside `start_mission`. When the strategist handled a task directly (e.g., "commit all and push" — just ran git commands without calling `start_mission`), the workspace was never created.
+
+**Fixed:** `ensureWorkspace()` is now called **on plugin load** (in `index.ts`, right after `Orchestrator` instantiation). This means:
+- Every project gets `.opencode/` + `.gitignore` immediately when lazycrew loads
+- Mission start still calls `ensureWorkspace()` for redundancy
+- No dependency on `start_mission` being called
+
+**Also:** `ensureWorkspace()` is now `public` (was `private`) so the plugin can call it directly.
+
+### Tests
+- 40 tests passing, build clean
+
 ## [1.6.0] - 2026-06-25
 
 ### Added: Extremist Enforcement Mode

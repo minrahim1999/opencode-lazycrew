@@ -75,6 +75,8 @@ const plugin: Plugin = async (input) => {
   // Register agents (based on initial automation setting)
   const agents = Orchestrator.agents(automation);
   const orch = new Orchestrator({ client, directory, automation });
+  // Enforce workspace on plugin load — every project gets .opencode/ immediately
+  orch.ensureWorkspace();
 
   return {
     config: async (config: any) => {

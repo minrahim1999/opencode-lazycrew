@@ -275,10 +275,10 @@ export class Orchestrator {
   }
 
   /**
-   * Ensure .opencode directory exists and .gitignore contains .opencode
-   * This is called by the plugin itself, not by agents.
+   * Ensure .opencode directory exists and .gitignore contains .opencode.
+   * Called on plugin load (constructor) AND on mission start for redundancy.
    */
-  private ensureWorkspace(): void {
+  ensureWorkspace(): void {
     // 1. Create .opencode directories
     mkdirSync(join(this.directory, ".opencode", "plans"), { recursive: true });
     mkdirSync(join(this.directory, ".opencode", "todo"), { recursive: true });
