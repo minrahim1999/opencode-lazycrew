@@ -38,6 +38,13 @@ Add to `~/.config/opencode/opencode.json`:
 
 That's it. The plugin auto-registers all agents with their prompts, permissions, and roles. You only need to set the **model** for each agent — everything else is handled. `.opencode/` and `.gitignore` are created automatically on plugin load — no mission required.
 
+### Task Detection
+The strategist automatically detects tasks vs questions:
+- **Task** = mentions file paths, code references, or asks for changes → triggers "Proceed?" gate
+- **Question** = purely informational, no file paths → answered directly
+
+So "can we use X instead of Y in `@lib/features/...`" is detected as a task, not a question.
+
 ## How Agents Work
 
 The plugin registers 5 agents automatically via the `config` hook. You don't need to manually define prompts, permissions, tools, or modes — just assign a model to each:

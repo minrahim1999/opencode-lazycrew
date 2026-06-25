@@ -2,6 +2,17 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.2] - 2026-06-25
+
+### Fixed: Task detection for file-path prompts
+
+**Problem:** Prompts mentioning file paths (e.g., "in `@lib/...` the visit website can we use...") were treated as questions because they started with "can we". The strategist answered directly, never calling `start_mission`.
+
+**Fixed:** Strategist prompt now has explicit **Task Detection Rules**:
+- ANY message mentioning file paths, code references, or concrete changes = TASK
+- "can we" + file path = TASK (not a question)
+- Purely informational queries without file paths = QUESTION
+
 ## [1.6.1] - 2026-06-25
 
 ### Fixed: Workspace not created for non-mission interactions
