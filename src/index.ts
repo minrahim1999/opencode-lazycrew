@@ -82,6 +82,13 @@ const plugin: Plugin = async (input) => {
     config: async (config: any) => {
       if (!config.agent) config.agent = {};
 
+      // Register lazycrew commands
+      config.command = config.command || {};
+      config.command["lazycrew"] = {
+        template: "<action> [description...]",
+        description: "LazyCrew mission control — /lazycrew mission <desc>, /lazycrew plan <desc>, /lazycrew status, /lazycrew abort",
+      };
+
       // Capture model assignments from user config
       const models: Record<string, string | undefined> = {};
 
@@ -106,6 +113,88 @@ const plugin: Plugin = async (input) => {
 
       // Pass models to orchestrator so it can pass them to session.prompt
       orch.setModels(models);
+    },
+
+    "command.execute.before": async (input: any, output: any) => {
+      const commandStr = (input.command || "").trim();
+      const args = (input.arguments || "").trim();
+
+      // Only handle /lazycrew commands
+      if (commandStr !== "lazycrew") return;
+
+      const [action, ...descParts] = args.split(/\s+/);
+      const description = descParts.join(" ").trim();
+
+      switch (action) {
+        case "mission": {
+          if (!description) {
+            output.parts = [{ text: "❌ Usage: /lazycrew mission <task description>" }];
+            return;
+          }
+          // Resume check
+          const recovery = orch.recoverMission();
+          if (recovery) {
+            output.parts = [{ text: `${recovery}\n\nPlease resolve the interrupted mission first (resume via /lazycrew resume), then start a new one.` }];
+            return;
+          }
+          const log = await orch.start(description);
+          output.parts = [{ text: log.join("\n") }];
+          return;
+        }
+
+        case "plan": {
+          if (!description) {
+            output.parts = [{ text: "❌ Usage: /lazycrew plan <task description>" }];
+            return;
+          }
+          // Force architect to write plan + todo
+          const result = await orch.forcePlan(description);
+          output.parts = [{ text: result }];
+          return;
+        }
+
+        case "status": {
+          const state = orch.getState();
+          if (!state.active) {
+            output.parts = [{ text: "No active mission.\n\nUse /lazycrew mission <description> to start one." }];
+            return;
+          }
+          const { done, total, failed } = orch.getProgress();
+          output.parts = [{ text: `Mission: ${state.slug}\nProgress: ${done}/${total} done, ${failed} failed\nDescription: ${state.description.slice(0, 200)}${state.description.length > 200 ? "..." : ""}` }];
+          return;
+        }
+
+        case "abort": {
+          orch.abort();
+          output.parts = [{ text: "✅ Mission aborted." }];
+          return;
+        }
+
+        case "resume": {
+          const recovery = orch.recoverMission();
+          if (!recovery) {
+            output.parts = [{ text: "No interrupted mission found. Use /lazycrew mission <description> to start new." }];
+            return;
+          }
+          // Start with the recovered description
+          const state = orch.getState();
+          const log = await orch.start(state.description);
+          output.parts = [{ text: log.join("\n") }];
+          return;
+        }
+
+        default: {
+          output.parts = [{ text: `LazyCrew commands:
+/lazycrew mission <description> — Force start pipeline
+/lazycrew plan <description> — Force architect to write plan + todo
+/lazycrew status — Show mission progress
+/lazycrew abort — Abort active mission
+/lazycrew resume — Resume interrupted mission
+
+Or just type your question — the strategist auto-detects tasks.` }];
+          return;
+        }
+      }
     },
 
     "experimental.chat.system.transform": async (_input: any, output: any) => {

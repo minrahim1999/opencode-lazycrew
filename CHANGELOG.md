@@ -2,6 +2,26 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.4] - 2026-06-25
+
+### Added: LazyCrew slash commands
+
+New `/lazycrew` command suite for explicit mission control when prompt-based auto-detection isn't enough:
+
+| Command | Purpose |
+|---------|---------|
+| `/lazycrew mission "<description>"` | Force start pipeline (bypasses strategist) |
+| `/lazycrew plan "<description>"` | Force architect to write plan + todo only |
+| `/lazycrew status` | Show current mission progress |
+| `/lazycrew abort` | Abort active mission |
+| `/lazycrew resume` | Resume interrupted mission |
+
+Commands are registered via the `config` hook and handled by `command.execute.before`.
+
+### Fixed: v1.6.3 regressions
+
+- Added missing `getState()`, `getProgress()`, `forcePlan()` methods to Orchestrator
+
 ## [1.6.3] - 2026-06-25
 
 ### Fixed: Strategist now reads/explores before deciding task vs question

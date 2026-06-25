@@ -478,6 +478,88 @@ Your previous work was: ${result?.slice(0, 200) || "(no output recorded)"}`;
     this.automation = value;
   }
 
+  /** Get current mission state */
+  getState(): { active: boolean; slug: string | null; description: string } {
+    let state: any = { active: this.active, slug: this.currentSlug, description: "" };
+    try {
+      const raw = readFileSync(this.stateFile, "utf-8");
+      const saved = JSON.parse(raw);
+      state = { ...state, ...saved };
+    } catch {
+      // state file doesn't exist
+    }
+    return state;
+  }
+
+  /** Get progress of current mission */
+  getProgress(): { done: number; total: number; failed: number } {
+    let done = 0, total = 0, failed = 0;
+    try {
+      const raw = readFileSync(this.stateFile, "utf-8");
+      const state = JSON.parse(raw);
+      total = state.tasksTotal || 0;
+      done = state.tasksDone || 0;
+      failed = state.tasksFailed || 0;
+    } catch {
+      // no state file
+    }
+    return { done, total, failed };
+  }
+
+  /** Force architect to write plan + todo (command bypass) */
+  async forcePlan(description: string): Promise<string> {
+    const slug = slugify(description);
+    const planDir = join(this.directory, ".opencode", "plans", slug);
+    const todoFile = join(this.directory, ".opencode", "todo", `${slug}.md`);
+    const planFile = join(planDir, "plan.md");
+    mkdirSync(planDir, { recursive: true });
+
+    this.active = true;
+    this.aborted = false;
+    this.currentSlug = slug;
+    this.saveState({ slug, description, status: "planning", startedAt: new Date().toISOString() });
+
+    const architectPrompt = `You are the Architect. Write ONLY a plan and todo list. DO NOT write code.
+
+Task: ${description}
+
+1. Write plan to: ${planFile}
+2. Write todo to: ${todoFile}
+3. Verify both files exist.
+4. Return a summary of the plan and todo list.`;
+
+    const result = await this.runAgent("architect", architectPrompt);
+
+    if (this.aborted) {
+      this.saveState({ status: "aborted", tasksDone: 0, tasksFailed: 0 });
+      return "Mission aborted before completion.";
+    }
+
+    // Verify files exist
+    const planExists = existsSync(planFile);
+    const todoExists = existsSync(todoFile);
+
+    if (!planExists || !todoExists) {
+      this.saveState({ status: "error", error: `Missing files: plan=${planExists}, todo=${todoExists}` });
+      return `⚠ Plan or todo missing. Plan exists: ${planExists}, Todo exists: ${todoExists}. Try again.`;
+    }
+
+    // Count tasks from todo
+    const todoContent = readFileSync(todoFile, "utf-8");
+    const tasks = todoContent.match(/^- \[[ x]\] TASK-\d+/gm) || [];
+    const total = tasks.length;
+    const done = tasks.filter((t: string) => t.includes("[x]")).length;
+
+    this.saveState({ status: "paused", tasksTotal: total, tasksDone: done, tasksFailed: total - done });
+
+    return `✅ Plan and todo written.
+Plan: ${planFile}
+Todo: ${todoFile}
+Tasks: ${total} total, ${done} done, ${total - done} remaining.
+
+Use /lazycrew mission "${description}" to execute, or type a new question.`;
+  }
+
   /** Get current mission state for strategist recovery */
   getMissionState(): { active: boolean; slug: string | null; state: any } {
     let state: any = null;
