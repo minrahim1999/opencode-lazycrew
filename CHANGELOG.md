@@ -2,6 +2,19 @@
 
 All notable changes follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.5] - 2026-06-25
+
+### Fixed: Plugin update workflow documentation
+
+Added explicit update instructions to README because OpenCode's `config` hook (which registers `/lazycrew` commands) only runs during `opencode plugin`, not `npm install`.
+
+```bash
+# Correct way to update:
+opencode plugin opencode-lazycrew -g -f
+```
+
+Without `-f`, OpenCode skips the config hook and commands never get registered.
+
 ## [1.6.4] - 2026-06-25
 
 ### Added: LazyCrew slash commands

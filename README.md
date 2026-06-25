@@ -38,12 +38,46 @@ Add to `~/.config/opencode/opencode.json`:
 
 That's it. The plugin auto-registers all agents with their prompts, permissions, and roles. You only need to set the **model** for each agent — everything else is handled. `.opencode/` and `.gitignore` are created automatically on plugin load — no mission required.
 
+### Updating the Plugin
+
+OpenCode plugins have a `config` hook that registers commands in `opencode.json`. This hook **only runs during `opencode plugin`, not during `npm install`**. So after updating the npm package, you must re-run the plugin command to update the config:
+
+```bash
+# Update the package AND re-run the config hook
+opencode plugin opencode-lazycrew -g -f
+
+# Or: update via npm first, then force re-register
+npm install -g opencode-lazycrew@latest
+opencode plugin opencode-lazycrew -g -f
+```
+
+The `-f` (force) flag is required because without it, OpenCode sees "already configured" and skips the hook. After running this, verify:
+
+```bash
+opencode debug config | grep -A 5 '"command"'
+```
+
+You should see `"lazycrew"` in the commands list.
+
 ### Task Detection
 The strategist automatically detects tasks vs questions:
 - **Task** = mentions file paths, code references, or asks for changes → triggers "Proceed?" gate
 - **Question** = purely informational, no file paths → answered directly
 
 So "can we use X instead of Y in `@lib/features/...`" is detected as a task, not a question.
+
+### Commands
+When the strategist doesn't auto-detect or you want explicit control, use slash commands:
+
+| Command | When to Use |
+|---------|-------------|
+| `/lazycrew mission "fix auth"` | Force start pipeline (bypasses strategist) |
+| `/lazycrew plan "fix auth"` | Force architect to write plan + todo only |
+| `/lazycrew status` | Show current mission progress |
+| `/lazycrew abort` | Abort active mission |
+| `/lazycrew resume` | Resume interrupted mission |
+
+Or just type your question — the strategist reads files, explores, and asks "Proceed?" if changes are needed.
 
 ## How Agents Work
 
